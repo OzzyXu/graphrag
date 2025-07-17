@@ -368,6 +368,16 @@ class SummarizeDescriptionsDefaults:
 
 
 @dataclass
+class CausalAnalysisDefaults:
+    """Default values for causal analysis."""
+
+    enabled: bool = True
+    prompt: None = None
+    max_analysis_length: int = 2000
+    model_id: str = DEFAULT_CHAT_MODEL_ID
+
+
+@dataclass
 class UmapDefaults:
     """Default values for UMAP."""
 
@@ -427,6 +437,7 @@ class GraphRagConfigDefaults:
     extract_claims: ExtractClaimsDefaults = field(default_factory=ExtractClaimsDefaults)
     prune_graph: PruneGraphDefaults = field(default_factory=PruneGraphDefaults)
     cluster_graph: ClusterGraphDefaults = field(default_factory=ClusterGraphDefaults)
+    causal_analysis: CausalAnalysisDefaults = field(default_factory=CausalAnalysisDefaults)
     umap: UmapDefaults = field(default_factory=UmapDefaults)
     local_search: LocalSearchDefaults = field(default_factory=LocalSearchDefaults)
     global_search: GlobalSearchDefaults = field(default_factory=GlobalSearchDefaults)

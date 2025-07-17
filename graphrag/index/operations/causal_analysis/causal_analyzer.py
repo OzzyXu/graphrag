@@ -1,0 +1,213 @@
+# Copyright (c) 2024 Microsoft Corporation.
+# Licensed under the MIT License
+
+"""A module containing causal analysis functionality."""
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+import networkx as nx
+import pandas as pd
+
+from graphrag.language_model.protocol.base import ChatModel
+from graphrag.prompts.index.causal_analysis import CAUSAL_ANALYSIS_PROMPT
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CausalAnalysisResult:
+    """Causal analysis result class definition."""
+
+    report: str
+    """The causal analysis report."""
+    
+    causal_relationships: list[dict[str, Any]]
+    """Extracted causal relationships."""
+    
+    confidence_scores: dict[str, float]
+    """Confidence scores for causal claims."""
+    
+    key_entities: list[str]
+    """Key entities identified in causal analysis."""
+
+
+class CausalAnalyzer:
+    """Causal analysis extractor class definition."""
+
+    _model: ChatModel
+    _analysis_prompt: str
+    _max_analysis_length: int
+
+    def __init__(
+        self,
+        model_invoker: ChatModel,
+        prompt: str | None = None,
+        max_analysis_length: int = 2000,
+    ):
+        """Init method definition."""
+        self._model = model_invoker
+        self._analysis_prompt = prompt or CAUSAL_ANALYSIS_PROMPT
+        self._max_analysis_length = max_analysis_length
+
+    async def __call__(
+        self, 
+        graph: nx.Graph,
+        entities: pd.DataFrame,
+        relationships: pd.DataFrame,
+        prompt_variables: dict[str, Any] | None = None
+    ) -> CausalAnalysisResult:
+        """Perform causal analysis on the knowledge graph."""
+        if prompt_variables is None:
+            prompt_variables = {}
+            
+        # Prepare graph data for analysis
+        graph_data = self._prepare_graph_data(graph, entities, relationships)
+        
+        # Perform causal analysis
+        result = await self._analyze_causality(graph_data, prompt_variables)
+        
+        # Extract structured information
+        causal_relationships = self._extract_causal_relationships(result)
+        confidence_scores = self._extract_confidence_scores(result)
+        key_entities = self._extract_key_entities(result)
+        
+        return CausalAnalysisResult(
+            report=result,
+            causal_relationships=causal_relationships,
+            confidence_scores=confidence_scores,
+            key_entities=key_entities,
+        )
+
+    def _prepare_graph_data(
+        self, 
+        graph: nx.Graph, 
+        entities: pd.DataFrame, 
+        relationships: pd.DataFrame
+    ) -> str:
+        """Prepare graph data for causal analysis."""
+        # Extract key graph information
+        nodes_info = []
+        for node, data in graph.nodes(data=True):
+            node_info = {
+                'id': node,
+                'type': data.get('type', ''),
+                'description': data.get('description', ''),
+                'degree': graph.degree(node),
+                'centrality': nx.degree_centrality(graph).get(node, 0),
+            }
+            nodes_info.append(node_info)
+        
+        edges_info = []
+        for source, target, data in graph.edges(data=True):
+            edge_info = {
+                'source': source,
+                'target': target,
+                'weight': data.get('weight', 1.0),
+                'description': data.get('description', ''),
+            }
+            edges_info.append(edge_info)
+        
+        # Format as structured text
+        graph_data = "=== ENTITIES ===\n"
+        for node in nodes_info:
+            graph_data += f"Entity: {node['id']}\n"
+            graph_data += f"  Type: {node['type']}\n"
+            graph_data += f"  Description: {node['description']}\n"
+            graph_data += f"  Degree: {node['degree']}\n"
+            graph_data += f"  Centrality: {node['centrality']:.3f}\n\n"
+        
+        graph_data += "=== RELATIONSHIPS ===\n"
+        for edge in edges_info:
+            graph_data += f"From: {edge['source']} -> To: {edge['target']}\n"
+            graph_data += f"  Weight: {edge['weight']}\n"
+            graph_data += f"  Description: {edge['description']}\n\n"
+        
+        return graph_data
+
+    async def _analyze_causality(
+        self, 
+        graph_data: str, 
+        prompt_variables: dict[str, Any]
+    ) -> str:
+        """Perform causal analysis using LLM."""
+        # Format the prompt with graph data
+        formatted_prompt = self._analysis_prompt.format(
+            graph_data=graph_data,
+            **prompt_variables
+        )
+        
+        # Get LLM response
+        response = await self._model.achat(formatted_prompt)
+        result = response.output.content or ""
+        
+        # Truncate if too long
+        if len(result) > self._max_analysis_length:
+            result = result[:self._max_analysis_length] + "..."
+        
+        return result
+
+    def _extract_causal_relationships(self, report: str) -> list[dict[str, Any]]:
+        """Extract structured causal relationships from the report."""
+        relationships = []
+        
+        # Simple extraction based on common patterns
+        lines = report.split('\n')
+        current_relationship = {}
+        
+        for line in lines:
+            line = line.strip()
+            if 'cause' in line.lower() or 'effect' in line.lower():
+                # Extract cause-effect pairs
+                if '->' in line or '→' in line:
+                    parts = line.replace('->', '→').split('→')
+                    if len(parts) == 2:
+                        relationships.append({
+                            'cause': parts[0].strip(),
+                            'effect': parts[1].strip(),
+                            'description': line,
+                            'confidence': 0.7  # Default confidence
+                        })
+        
+        return relationships
+
+    def _extract_confidence_scores(self, report: str) -> dict[str, float]:
+        """Extract confidence scores from the report."""
+        confidence_scores = {}
+        
+        # Look for confidence indicators in the report
+        lines = report.split('\n')
+        for line in lines:
+            line = line.lower()
+            if 'confidence' in line or 'reliability' in line:
+                # Extract confidence scores (simple pattern matching)
+                if 'high' in line:
+                    confidence_scores['overall'] = 0.8
+                elif 'medium' in line:
+                    confidence_scores['overall'] = 0.6
+                elif 'low' in line:
+                    confidence_scores['overall'] = 0.4
+        
+        if not confidence_scores:
+            confidence_scores['overall'] = 0.6  # Default confidence
+        
+        return confidence_scores
+
+    def _extract_key_entities(self, report: str) -> list[str]:
+        """Extract key entities mentioned in the report."""
+        entities = []
+        
+        # Simple entity extraction (can be enhanced with NER)
+        lines = report.split('\n')
+        for line in lines:
+            # Look for capitalized words that might be entities
+            words = line.split()
+            for word in words:
+                if word[0].isupper() and len(word) > 2:
+                    # Clean up the word
+                    clean_word = word.strip('.,;:!?')
+                    if clean_word not in entities:
+                        entities.append(clean_word)
+        
+        return entities[:10]  # Return top 10 entities 

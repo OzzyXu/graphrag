@@ -59,6 +59,7 @@ _standard_workflows = [
     "create_final_text_units",
     "create_community_reports",
     "generate_text_embeddings",
+    "causal_analysis",
 ]
 _fast_workflows = [
     "create_base_text_units",
@@ -70,6 +71,7 @@ _fast_workflows = [
     "create_final_text_units",
     "create_community_reports_text",
     "generate_text_embeddings",
+    "causal_analysis",
 ]
 _update_workflows = [
     "update_final_documents",
@@ -95,3 +97,7 @@ PipelineFactory.register_pipeline(
     IndexingMethod.FastUpdate,
     ["load_update_documents", *_fast_workflows, *_update_workflows],
 )
+
+# Register causal analysis workflow
+from graphrag.index.workflows.causal_analysis import run_workflow as causal_analysis_workflow
+PipelineFactory.register("causal_analysis", causal_analysis_workflow)
