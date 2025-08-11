@@ -29,6 +29,37 @@ To learn more about GraphRAG and how it can be used to enhance your LLM's abilit
 
 To get started with the GraphRAG system we recommend trying the [command line quickstart](https://microsoft.github.io/graphrag/get_started/).
 
+## Dependency Management
+
+GraphRAG has specific dependency requirements to ensure compatibility. We recommend using the provided constraint files to avoid version conflicts.
+
+### Using Poetry (Recommended)
+```bash
+# Install with Poetry
+poetry install
+
+# Or install with constraints
+poetry install --with dev
+```
+
+### Using pip with Constraints
+```bash
+# Install with version constraints to prevent compatibility issues
+pip install -r constraints.txt
+
+# For development
+pip install -r requirements-dev.txt -r constraints.txt
+```
+
+### Critical Compatibility Notes
+- **openai**: Must be `>=1.68.0,<1.80.0` for compatibility with `fnllm`
+- **fnllm**: Must be `>=0.3.0,<0.4.0` (latest stable version)
+- **Python**: Requires `>=3.10,<3.13`
+
+⚠️ *Warning: Installing GraphRAG without these version constraints may result in import errors and CLI failures.*
+
+📚 *For detailed information about this compatibility fix and other maintenance records, see [docs/maintenance/README.md](docs/maintenance/README.md)*
+
 ## Repository Guidance
 
 This repository presents a methodology for using knowledge graph memory structures to enhance LLM outputs. Please note that the provided code serves as a demonstration and is not an officially supported Microsoft offering.

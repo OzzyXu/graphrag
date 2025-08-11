@@ -1,0 +1,28 @@
+# GraphRAG Development Dependencies
+# Install with: pip install -r requirements-dev.txt -r constraints.txt
+
+# Testing
+pytest>=8.3.4,<9.0.0
+pytest-asyncio>=0.24.0,<0.25.0
+pytest-timeout>=2.3.1,<3.0.0
+pytest-dotenv>=0.5.2,<0.6.0
+coverage>=7.6.9,<8.0.0
+
+# Code quality
+ruff>=0.8.2,<0.9.0
+pyright>=1.1.390,<2.0.0
+deptry>=0.21.1,<0.22.0
+
+# Documentation
+mkdocs-material>=9.5.48,<10.0.0
+mkdocs-jupyter>=0.25.1,<0.26.0
+mkdocs-exclude-search>=0.6.6,<0.7.0
+mkdocs-typer>=0.0.3,<0.1.0
+
+# Development tools
+poethepoet>=0.31.1,<0.32.0
+semversioner>=2.0.5,<3.0.0
+update-toml>=0.2.1,<0.3.0
+ipykernel>=6.29.5,<7.0.0
+jupyter>=1.1.1,<2.0.0
+nbconvert>=7.16.4,<8.0.0
