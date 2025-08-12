@@ -34,9 +34,9 @@ class CausalGraphBuilder:
         causal_result : CausalAnalysisResult
             The result from causal analysis
         entities : pd.DataFrame
-            Original entities from the knowledge graph
+            Original entities from the fallback source
         relationships : pd.DataFrame
-            Original relationships from the knowledge graph
+            Original relationships from the fallback source
             
         Returns
         -------
@@ -121,7 +121,7 @@ class CausalGraphBuilder:
                     source, target,
                     relationship_type='inferred_causal',
                     description=description,
-                    confidence=min(weight_float / 10.0, 0.8),  # Scale weight to confidence
+                    confidence=min(weight_float / 10.0, 0.33),  # Scale weight to confidence
                     source='inferred'
                 )
         
@@ -130,6 +130,107 @@ class CausalGraphBuilder:
         # Note: Isolated nodes are preserved in the full graph but removed in subgraph
         
         return causal_graph
+
+    def build_fallback_only_graph(
+        self,
+        entities: pd.DataFrame,
+        relationships: pd.DataFrame,
+        max_relationships: int = 15,
+        min_weight_threshold: float = 0.1
+    ) -> nx.DiGraph:
+        """Build a causal graph based solely on original fallback relationships.
+        
+        This function creates a directed graph using only the original relationships
+        from the fallback source, without any LLM-extracted causal relationships.
+        
+        Parameters
+        ----------
+        entities : pd.DataFrame
+            Original entities from the fallback source
+        relationships : pd.DataFrame
+            Original relationships from the fallback source
+        max_relationships : int
+            Maximum number of top relationships to include
+        min_weight_threshold : float
+            Minimum weight threshold for relationships
+            
+        Returns
+        -------
+        nx.DiGraph
+            A directed graph based on original fallback relationships
+        """
+        logger.info("Building fallback-only graph from original fallback relationships")
+        
+        # Create a directed graph
+        fallback_graph = nx.DiGraph()
+        
+        # Add nodes from original entities (prioritize high-degree entities)
+        if 'degree' in entities.columns:
+            top_entities = entities.nlargest(25, 'degree')  # Get top 25 entities by degree
+        else:
+            top_entities = entities.head(25)  # Fallback if no degree column
+            
+        for _, entity in top_entities.iterrows():
+            entity_id = entity.get('id', entity.get('title', 'Unknown'))
+            fallback_graph.add_node(
+                entity_id,
+                type='fallback_entity',
+                description=entity.get('description', ''),
+                entity_type=entity.get('type', ''),
+                source='fallback_source',
+                degree=entity.get('degree', 0),
+                original_weight=entity.get('weight', 1.0)
+            )
+        
+        # Filter and add relationships as directed edges
+        filtered_relationships = relationships[
+            relationships['weight'] >= min_weight_threshold
+        ] if 'weight' in relationships.columns else relationships
+        
+        # Sort by weight and take top relationships
+        if 'weight' in relationships.columns:
+            top_relationships = filtered_relationships.nlargest(max_relationships, 'weight')
+        else:
+            top_relationships = filtered_relationships.head(max_relationships)
+        
+        added_edges = 0
+        for _, rel in top_relationships.iterrows():
+            source = rel.get('source', 'Unknown')
+            target = rel.get('target', 'Unknown')
+            description = rel.get('description', '')
+            weight = rel.get('weight', 1.0)
+            
+            # Add nodes if they don't exist
+            if source not in fallback_graph:
+                fallback_graph.add_node(
+                    source, 
+                    type='fallback_entity', 
+                    source='fallback_source'
+                )
+            if target not in fallback_graph:
+                fallback_graph.add_node(
+                    target, 
+                    type='fallback_entity', 
+                    source='fallback_source'
+                )
+            
+            # Add directed edge (assuming source -> target causality)
+            weight_float = float(weight) if weight is not None else 1.0
+            confidence = 0.2  # Fixed confidence for fallback relationships
+            
+            fallback_graph.add_edge(
+                source, target,
+                relationship_type='fallback_based_causal',
+                description=description,
+                confidence=confidence,
+                original_weight=weight_float,
+                source='fallback_source'
+            )
+            added_edges += 1
+        
+        logger.info(f"Created fallback graph with {fallback_graph.number_of_nodes()} nodes and {added_edges} edges")
+        
+        return fallback_graph
 
     def create_causal_subgraph(
         self,

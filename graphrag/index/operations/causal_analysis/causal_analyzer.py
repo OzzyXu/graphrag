@@ -173,26 +173,64 @@ class CausalAnalyzer:
         return formatted_prompt, result
 
     def _extract_causal_relationships(self, report: str) -> list[dict[str, Any]]:
-        """Extract structured causal relationships from the report."""
+        """Extract structured causal relationships from the Major Causal Pathways section."""
         relationships = []
         
-        # Simple extraction based on common patterns
+        # Find the "Major Causal Pathways" section
         lines = report.split('\n')
-        current_relationship = {}
+        in_pathways_section = False
         
         for line in lines:
             line = line.strip()
-            if 'cause' in line.lower() or 'effect' in line.lower():
-                # Extract cause-effect pairs
-                if '->' in line or '→' in line:
-                    parts = line.replace('->', '→').split('→')
+            
+            # Check if we're entering the major causal pathways section
+            if '3. Major Causal Pathways' in line or '## 3. Major Causal Pathways' in line:
+                in_pathways_section = True
+                continue
+            
+            # Check if we're leaving the section (next numbered section)
+            if in_pathways_section and (
+                line.startswith('4.') or line.startswith('## 4.') or 
+                line.startswith('**4.') or line.startswith('### 4.')
+            ):
+                break
+            
+            # Extract causal relationships from this section
+            if in_pathways_section and line:
+                # Look for numbered patterns like "1. **Cause** → **Effect**: description"
+                if ('→' in line or '->' in line) and ('**' in line):
+                    # Replace -> with → for consistency
+                    normalized_line = line.replace('->', '→')
+                    
+                    # Split on the arrow
+                    parts = normalized_line.split('→')
                     if len(parts) == 2:
-                        relationships.append({
-                            'cause': parts[0].strip(),
-                            'effect': parts[1].strip(),
-                            'description': line,
-                            'confidence': 0.7  # Default confidence
-                        })
+                        cause_part = parts[0].strip()
+                        effect_part = parts[1].strip()
+                        
+                        # Extract the actual cause and effect from bold text
+                        import re
+                        cause_match = re.search(r'\*\*(.*?)\*\*', cause_part)
+                        effect_match = re.search(r'\*\*(.*?)\*\*', effect_part)
+                        
+                        if cause_match and effect_match:
+                            cause = cause_match.group(1)
+                            effect = effect_match.group(1)
+                            
+                            relationships.append({
+                                'cause': cause,
+                                'effect': effect,
+                                'description': line,
+                                'confidence': 1.0  # Default confidence
+                            })
+                        else:
+                            # Fallback to simple split if no bold formatting
+                            relationships.append({
+                                'cause': cause_part.strip('*').strip(),
+                                'effect': effect_part.split(':')[0].strip('*').strip(),
+                                'description': line,
+                                'confidence': 1.0
+                            })
         
         return relationships
 

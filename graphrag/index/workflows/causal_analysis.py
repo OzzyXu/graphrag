@@ -29,7 +29,7 @@ async def run_workflow(
     config: GraphRagConfig,
     context: PipelineRunContext,
 ) -> WorkflowFunctionOutput:
-    """Run causal analysis on the extracted knowledge graph."""
+    """Run causal analysis on the extracted fallback source."""
     logger.info("Workflow started: causal_analysis")
     
     # Load required data
@@ -98,6 +98,9 @@ async def run_workflow(
     
     # Create and save causal graph snapshot
     await _create_causal_graph_snapshot(result, entities, relationships, context.output_storage, config)
+    
+    # Create and save fallback-only graph based on fallback source
+    await _create_fallback_only_graph(entities, relationships, context.output_storage)
     
     logger.info("Workflow completed: causal_analysis")
     return WorkflowFunctionOutput(
@@ -348,3 +351,59 @@ async def _output_network_data(
     except Exception as e:
         logger.error(f"Failed to output network data: {e}")
         # Don't fail the entire workflow if network data output fails
+
+
+async def _create_fallback_only_graph(
+    entities: pd.DataFrame,
+    relationships: pd.DataFrame,
+    output_storage: Any,
+) -> None:
+    """Create and save a fallback-only graph based on original fallback relationships."""
+    try:
+        # Create causal graph builder
+        builder = CausalGraphBuilder()
+        
+        # Build the fallback-only graph
+        logger.info(f"Building fallback-only graph with {len(entities)} entities and {len(relationships)} relationships")
+        fallback_graph = builder.build_fallback_only_graph(entities, relationships)
+        logger.info(f"Created fallback-only graph with {len(list(fallback_graph.nodes()))} nodes and {len(list(fallback_graph.edges()))} edges")
+        
+        # Create a filtered subgraph for visualization
+        subgraph = builder.create_causal_subgraph(
+            fallback_graph,
+            min_confidence=0.1,  # Lower threshold for fallback relationships
+            max_nodes=50
+        )
+        logger.info(f"Created fallback-only subgraph with {len(list(subgraph.nodes()))} nodes and {len(list(subgraph.edges()))} edges")
+        
+        # Export to GraphML using write_graphml method
+        import io
+        import tempfile
+        import os
+        
+        # Create temporary files for GraphML export
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.graphml', delete=False) as temp_sub:
+            nx.write_graphml(subgraph, temp_sub.name)
+            temp_sub.flush()
+            
+            # Read the content and save to storage
+            with open(temp_sub.name, 'r', encoding='utf-8') as f:
+                subgraph_content = f.read()
+            await output_storage.set("causal_graph_fallback_only.graphml", subgraph_content)
+            os.unlink(temp_sub.name)
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.graphml', delete=False) as temp_full:
+            nx.write_graphml(fallback_graph, temp_full.name)
+            temp_full.flush()
+            
+            # Read the content and save to storage
+            with open(temp_full.name, 'r', encoding='utf-8') as f:
+                full_content = f.read()
+            await output_storage.set("causal_graph_fallback_only_full.graphml", full_content)
+            os.unlink(temp_full.name)
+        
+        logger.info("Fallback-only graph snapshots created successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to create fallback-only graph snapshot: {e}")
+        # Don't fail the entire workflow if fallback graph creation fails
