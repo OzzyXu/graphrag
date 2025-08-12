@@ -89,6 +89,10 @@ async def run_workflow(
             analyzer, entities, relationships, context
         )
     
+    # Output prompt template and network data
+    await _output_prompt_template(context.output_storage)
+    await _output_network_data(entities, relationships, context.output_storage)
+    
     # Save results
     await _save_causal_analysis_results(result, context.output_storage)
     
@@ -102,6 +106,8 @@ async def run_workflow(
             "causal_relationships": result.causal_relationships,
             "confidence_scores": result.confidence_scores,
             "key_entities": result.key_entities,
+            "formatted_prompt": result.formatted_prompt,
+            "causal_report_file": "output/causal_analysis_report.md",
         }
     )
 
@@ -147,12 +153,37 @@ async def _save_causal_analysis_results(
     output_storage: Any,
 ) -> None:
     """Save causal analysis results to storage."""
-    # Save the report as text
-    report_df = pd.DataFrame({
-        'report': [result.report],
-        'timestamp': [pd.Timestamp.now()],
-    })
-    await write_table_to_storage(report_df, "causal_analysis_report", output_storage)
+    # Save the report as a markdown file
+    if result.report:
+        try:
+            import os
+            from pathlib import Path
+            
+            # Get the base directory from the storage
+            base_dir = getattr(output_storage, '_root_dir', 'output')
+            
+            # Save the report directly under output directory
+            report_file_path = Path(base_dir) / 'causal_analysis_report.md'
+            
+            with open(report_file_path, 'w', encoding='utf-8') as f:
+                f.write("# Causal Analysis Report\n")
+                f.write(f"Generated on: {pd.Timestamp.now()}\n\n")
+                f.write("---\n\n")
+                f.write(result.report)
+            
+            logger.info(f"Causal analysis report saved to: {report_file_path}")
+            
+            # Also save to storage for consistency
+            await output_storage.set("causal_analysis_report.md", result.report)
+            
+        except Exception as e:
+            logger.error(f"Failed to save causal analysis report as markdown: {e}")
+            # Fallback to saving as DataFrame if markdown fails
+            report_df = pd.DataFrame({
+                'report': [result.report],
+                'timestamp': [pd.Timestamp.now()],
+            })
+            await write_table_to_storage(report_df, "causal_analysis_report", output_storage)
     
     # Save causal relationships
     if result.causal_relationships:
@@ -229,3 +260,91 @@ async def _create_causal_graph_snapshot(
     except Exception as e:
         logger.error(f"Failed to create causal graph snapshot: {e}")
         # Don't fail the entire workflow if snapshot creation fails 
+
+
+async def _output_prompt_template(output_storage: Any) -> None:
+    """Output the actual causal analysis prompt used in the workflow to output/prompts directory."""
+    try:
+        import os
+        from pathlib import Path
+        from graphrag.prompts.index.causal_analysis import CAUSAL_ANALYSIS_PROMPT
+        
+        # Get the base directory from storage and create prompts subdirectory
+        base_dir = getattr(output_storage, '_root_dir', 'output')
+        # Go up one level from output to create prompts directory at the same level
+        root_dir = Path(base_dir).parent
+        prompts_dir = root_dir / 'prompts'
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save the actual prompt used in the workflow
+        prompt_file_path = prompts_dir / 'causal_analysis_prompt.txt'
+        with open(prompt_file_path, 'w', encoding='utf-8') as f:
+            f.write("# Causal Analysis Prompt Used in Workflow\n")
+            f.write(f"# Source: graphrag/prompts/index/causal_analysis.py\n")
+            f.write("# " + "="*50 + "\n\n")
+            f.write(CAUSAL_ANALYSIS_PROMPT)
+        
+        logger.info(f"Causal analysis prompt saved to: {prompt_file_path}")
+        
+    except Exception as e:
+        logger.error(f"Failed to output prompt template: {e}")
+        # Don't fail the entire workflow if prompt template output fails
+
+
+async def _output_network_data(
+    entities: pd.DataFrame,
+    relationships: pd.DataFrame,
+    output_storage: Any,
+) -> None:
+    """Extract and output the network data to output directory."""
+    try:
+        import os
+        from pathlib import Path
+        
+        # Get the base directory from storage
+        base_dir = getattr(output_storage, '_root_dir', 'output')
+        
+        # Create detailed network data output
+        network_data_content = "---Network Data--\n"
+        network_data_content += "=== ENTITIES ===\n"
+        
+        # Add entities
+        for _, entity in entities.iterrows():
+            entity_id = entity.get('id', 'Unknown')
+            entity_type = entity.get('type', '')
+            description = entity.get('description', '')
+            degree = entity.get('degree', 0)
+            centrality = entity.get('centrality', 0.0)
+            
+            network_data_content += f"Entity: {entity_id}\n"
+            network_data_content += f"  Type: {entity_type}\n"
+            network_data_content += f"  Description: {description}\n"
+            network_data_content += f"  Degree: {degree}\n"
+            network_data_content += f"  Centrality: {centrality:.3f}\n\n"
+        
+        network_data_content += "=== RELATIONSHIPS ===\n"
+        
+        # Add relationships
+        for _, rel in relationships.iterrows():
+            source = rel.get('source', 'Unknown')
+            target = rel.get('target', 'Unknown')
+            weight = rel.get('weight', 1.0)
+            description = rel.get('description', '')
+            
+            network_data_content += f"From: {source} -> To: {target}\n"
+            network_data_content += f"  Weight: {weight}\n"
+            network_data_content += f"  Description: {description}\n\n"
+        
+        # Save detailed network data
+        network_data_file_path = Path(base_dir) / 'network_data_detailed.txt'
+        with open(network_data_file_path, 'w', encoding='utf-8') as f:
+            f.write(network_data_content)
+        
+        logger.info(f"Network data detailed output saved to: {network_data_file_path}")
+        
+        # Also save to storage for consistency
+        await output_storage.set("network_data_detailed.txt", network_data_content)
+        
+    except Exception as e:
+        logger.error(f"Failed to output network data: {e}")
+        # Don't fail the entire workflow if network data output fails

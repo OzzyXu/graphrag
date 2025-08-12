@@ -31,6 +31,9 @@ class CausalAnalysisResult:
     
     key_entities: list[str]
     """Key entities identified in causal analysis."""
+    
+    formatted_prompt: str
+    """The formatted prompt that was sent to the LLM."""
 
 
 class CausalAnalyzer:
@@ -80,7 +83,7 @@ class CausalAnalyzer:
         graph_data = self._prepare_graph_data(graph, entities, relationships)
         
         # Perform causal analysis
-        result = await self._analyze_causality(graph_data, prompt_variables)
+        formatted_prompt, result = await self._analyze_causality(graph_data, prompt_variables)
         
         # Extract structured information
         causal_relationships = self._extract_causal_relationships(result)
@@ -92,6 +95,7 @@ class CausalAnalyzer:
             causal_relationships=causal_relationships,
             confidence_scores=confidence_scores,
             key_entities=key_entities,
+            formatted_prompt=formatted_prompt,
         )
 
     def _prepare_graph_data(
@@ -144,7 +148,7 @@ class CausalAnalyzer:
         self, 
         graph_data: str, 
         prompt_variables: dict[str, Any]
-    ) -> str:
+    ) -> tuple[str, str]:
         """Perform causal analysis using LLM."""
         # Format the prompt with graph data
         formatted_prompt = self._analysis_prompt.format(
@@ -166,7 +170,7 @@ class CausalAnalyzer:
         else:
             logger.info(f"Full-length causal analysis report generated: {len(result)} characters (no truncation)")
         
-        return result
+        return formatted_prompt, result
 
     def _extract_causal_relationships(self, report: str) -> list[dict[str, Any]]:
         """Extract structured causal relationships from the report."""

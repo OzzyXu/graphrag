@@ -23,7 +23,24 @@ Briefly introduce the context and purpose of this causal analysis.
 Provide an overview of the most important entities in the causal network and their relevance.
 
 **3. Major Causal Pathways**
-Describe the primary causal chains observed, emphasizing key cause-and-effect relationships.
+Identify and describe the primary causal chains observed in the network data. For each causal relationship, use the following format with arrow notation (→) to clearly show cause-to-effect direction:
+
+1. **Cause Entity** → **Effect Entity**: Brief description of the causal relationship
+2. **Another Cause** → **Another Effect**: Description of how one influences the other
+3. **Cause** → **Effect**: Description of the causal mechanism
+
+Example format:
+- **Marley's Warning** → **Scrooge's Reflection**: Jacob Marley's ghost warns Scrooge
+- **Spirits' Visitation** → **Scrooge's Understanding**: Each spirit shows consequences
+- **Scrooge's Understanding** → **Scrooge's Transformation**: Cumulative effect leads to change
+- **Scrooge's Transformation** → **Community Impact**: Benefits Bob Cratchit and Tiny Tim
+
+Focus on:
+- Clear cause→effect relationships using arrow notation (→)
+- Specific entities from the network data
+- Concise descriptions of how one entity influences another
+- Logical progression of causal chains
+- At least 3-5 major causal pathways
 
 **4. Confidence and Evidence Strength**
 Assess the reliability of the causal claims, mentioning supporting data where available.
