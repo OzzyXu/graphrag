@@ -59,3 +59,11 @@ We strongly recommend to fine-tune your prompts following the [Prompt Tuning Gui
 Please see the [breaking changes](https://github.com/microsoft/graphrag/blob/main/breaking-changes.md) document for notes on our approach to versioning the project.
 
 *Always run `graphrag init --root [path] --force` between minor version bumps to ensure you have the latest config format. Run the provided migration notebook between major version bumps if you want to avoid re-indexing prior datasets. Note that this will overwrite your configuration and prompts, so backup if necessary.*
+
+## Maintenance and Troubleshooting 🔧
+
+For dependency issues, compatibility fixes, and maintenance records, see the [Maintenance Documentation](maintenance/README.md). This includes:
+- Dependency compatibility fixes
+- Installation troubleshooting
+- Version constraint explanations
+- Historical maintenance records

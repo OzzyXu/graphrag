@@ -4,6 +4,27 @@
 """Home Page module."""
 
 import asyncio
+import os
+from pathlib import Path
+
+# Load .env file before importing other modules
+def load_env_file():
+    """Load environment variables from .env file."""
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        print(f"🔍 [ENV] Loading .env file from: {env_file}")
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key] = value
+                    print(f"🔍 [ENV] Set {key} = {value}")
+    else:
+        print(f"⚠️ [ENV] No .env file found at: {env_file}")
+
+# Load environment variables immediately
+load_env_file()
 
 import streamlit as st
 from app_logic import dataset_name, initialize, run_all_searches, run_generate_questions
@@ -21,7 +42,6 @@ from ui.sidebar import create_side_bar
 async def main():
     """Return main streamlit component to render the app."""
     sv = initialize()
-
     create_side_bar(sv)
 
     st.markdown(

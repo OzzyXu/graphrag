@@ -56,9 +56,12 @@ lancedb = "^0.17.0"
 aiofiles = "^24.1.0"
 
 # LLM
-fnllm = {extras = ["azure", "openai"], version = "^0.3.0"}
+# Version constraints to prevent compatibility issues:
+# - openai <1.80.0: fnllm 0.3.x is incompatible with openai >=1.80.0
+# - fnllm <0.4.0: Latest stable version that works with openai 1.68.0-1.79.x
+fnllm = {extras = ["azure", "openai"], version = ">=0.3.0,<0.4.0"}
 json-repair = "^0.30.3"
-openai = "^1.68.0"
+openai = ">=1.68.0,<1.80.0"
 nltk = "3.9.1"
 tiktoken = "^0.9.0"
 
