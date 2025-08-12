@@ -5,7 +5,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Union
 
 import networkx as nx
 import pandas as pd
@@ -38,18 +38,32 @@ class CausalAnalyzer:
 
     _model: ChatModel
     _analysis_prompt: str
-    _max_analysis_length: int
+    _max_analysis_length: Union[int, str]
 
     def __init__(
         self,
         model_invoker: ChatModel,
         prompt: str | None = None,
-        max_analysis_length: int = 2000,
+        max_analysis_length: Union[int, str] = 2000,
     ):
         """Init method definition."""
         self._model = model_invoker
         self._analysis_prompt = prompt or CAUSAL_ANALYSIS_PROMPT
         self._max_analysis_length = max_analysis_length
+        
+        # Validate max_analysis_length
+        if isinstance(max_analysis_length, str) and max_analysis_length.lower() != "full":
+            raise ValueError("max_analysis_length must be an integer or 'full'")
+    
+    @property
+    def is_full_length_enabled(self) -> bool:
+        """Check if full length analysis is enabled."""
+        return self._max_analysis_length == "full"
+    
+    @property
+    def max_length(self) -> Union[int, str]:
+        """Get the maximum analysis length setting."""
+        return self._max_analysis_length
 
     async def __call__(
         self, 
@@ -142,9 +156,15 @@ class CausalAnalyzer:
         response = await self._model.achat(formatted_prompt)
         result = response.output.content or ""
         
-        # Truncate if too long
-        if len(result) > self._max_analysis_length:
-            result = result[:self._max_analysis_length] + "..."
+        # Truncate if too long (only if not using "full" option)
+        if self._max_analysis_length != "full" and isinstance(self._max_analysis_length, int):
+            if len(result) > self._max_analysis_length:
+                logger.info(f"Truncating causal analysis report from {len(result)} to {self._max_analysis_length} characters")
+                result = result[:self._max_analysis_length] + "..."
+            else:
+                logger.info(f"Causal analysis report generated: {len(result)} characters (within {self._max_analysis_length} limit)")
+        else:
+            logger.info(f"Full-length causal analysis report generated: {len(result)} characters (no truncation)")
         
         return result
 

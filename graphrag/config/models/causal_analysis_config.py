@@ -3,7 +3,7 @@
 
 """Causal analysis configuration."""
 
-from typing import Any
+from typing import Any, Union
 
 from pydantic import BaseModel, Field
 
@@ -25,11 +25,11 @@ class CausalAnalysisConfig(BaseModel):
     )
     """The prompt to use for causal analysis."""
 
-    max_analysis_length: int = Field(
-        description="The maximum length of the causal analysis report.",
+    max_analysis_length: Union[int, str] = Field(
+        description="The maximum length of the causal analysis report. Use 'full' for unlimited length, or specify a number.",
         default=defs.graphrag_config_defaults.causal_analysis.max_analysis_length,
     )
-    """The maximum length of the causal analysis report."""
+    """The maximum length of the causal analysis report. Use 'full' for unlimited length, or specify a number."""
 
     model_id: str = Field(
         description="The model ID to use for causal analysis.",

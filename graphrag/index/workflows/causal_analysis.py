@@ -64,6 +64,13 @@ async def run_workflow(
         config=causal_analysis_llm_settings,
     )
     
+    # Log the analysis length setting
+    max_length = config.causal_analysis.max_analysis_length
+    if max_length == "full":
+        logger.info("Causal analysis configured with 'full' option - no length limits will be applied")
+    else:
+        logger.info(f"Causal analysis configured with max length: {max_length} characters")
+    
     analyzer = CausalAnalyzer(
         model_invoker=model,
         max_analysis_length=config.causal_analysis.max_analysis_length,

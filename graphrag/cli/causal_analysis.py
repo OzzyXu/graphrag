@@ -65,15 +65,27 @@ async def _run_causal_analysis(config: GraphRagConfig) -> None:
         # Run the causal analysis workflow
         result = await run_workflow(config, context)
         
+        # Display configuration information
+        max_length = config.causal_analysis.max_analysis_length
+        if max_length == "full":
+            print(f"\n🔧 Configuration: Using 'full' option - no length limits applied")
+        else:
+            print(f"\n🔧 Configuration: Maximum report length set to {max_length} characters")
+        
         # Print results
         print("\n" + "="*80)
         print("CAUSAL ANALYSIS RESULTS")
         print("="*80)
         
         if result.result and "causal_report" in result.result:
+            report = result.result["causal_report"]
             print("\n📊 CAUSAL ANALYSIS REPORT:")
             print("-" * 40)
-            print(result.result["causal_report"])
+            print(f"📏 Report length: {len(report)} characters")
+            if max_length != "full" and isinstance(max_length, int) and len(report) > max_length:
+                print(f"⚠️  Report was truncated from {len(report)} to {max_length} characters")
+            print("-" * 40)
+            print(report)
         
         if result.result and "causal_relationships" in result.result and result.result["causal_relationships"]:
             print("\n🔗 CAUSAL RELATIONSHIPS:")
