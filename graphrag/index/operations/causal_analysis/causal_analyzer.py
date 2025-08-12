@@ -219,19 +219,65 @@ class CausalAnalyzer:
         return confidence_scores
 
     def _extract_key_entities(self, report: str) -> list[str]:
-        """Extract key entities mentioned in the report."""
+        """Extract key entities from the 'Key Entities and Their Roles' section."""
         entities = []
         
-        # Simple entity extraction (can be enhanced with NER)
+        # Find the "Key Entities and Their Roles" section
+        lines = report.split('\n')
+        in_entities_section = False
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Check if we're entering the key entities section
+            if '2. Key Entities and Their Roles' in line or '## 2. Key Entities and Their Roles' in line:
+                in_entities_section = True
+                continue
+            
+            # Check if we're leaving the section (next numbered section)
+            if in_entities_section and (
+                line.startswith('3.') or line.startswith('## 3.') or 
+                line.startswith('**3.') or 'Major Causal Pathways' in line
+            ):
+                break
+            
+            # Extract entities from this section
+            if in_entities_section and line:
+                # Look for pattern: - **Entity Name**: description
+                import re
+                entity_match = re.match(r'^-\s*\*\*([^*]+)\*\*:', line)
+                if entity_match:
+                    entity_name = entity_match.group(1).strip()
+                    if entity_name and entity_name not in entities:
+                        entities.append(entity_name)
+                
+                # Also look for entities mentioned in regular text within this section
+                # Extract capitalized words that look like proper nouns
+                words = line.split()
+                for word in words:
+                    if len(word) > 2 and word[0].isupper():
+                        clean_word = word.strip('.,;:!?*-')
+                        # Skip common words and formatting
+                        if (clean_word not in ['The', 'This', 'These', 'They', 'Key', 'Entities', 'Their', 'Roles'] 
+                            and clean_word not in entities 
+                            and not clean_word.startswith('**')):
+                            entities.append(clean_word)
+        
+        # If no entities found in the specific section, fallback to the old method
+        if not entities:
+            entities = self._extract_key_entities_fallback(report)
+        
+        return entities[:10]  # Return top 10 entities
+
+    def _extract_key_entities_fallback(self, report: str) -> list[str]:
+        """Fallback method for entity extraction if section-specific extraction fails."""
+        entities = []
         lines = report.split('\n')
         for line in lines:
-            # Look for capitalized words that might be entities
             words = line.split()
             for word in words:
-                if word[0].isupper() and len(word) > 2:
-                    # Clean up the word
+                if len(word) > 2 and word[0].isupper():
                     clean_word = word.strip('.,;:!?')
                     if clean_word not in entities:
                         entities.append(clean_word)
-        
-        return entities[:10]  # Return top 10 entities 
+        return entities 

@@ -20,7 +20,17 @@ Write a **structured, professional causality analysis report** that:
 Briefly introduce the context and purpose of this causal analysis.
 
 **2. Key Entities and Their Roles**
-Provide an overview of the most important entities in the causal network and their relevance.
+List the most important entities in the causal network with their roles. Format each entity clearly for extraction:
+
+- **Entity Name**: Description of role and relevance
+- **Another Entity**: Description of role and relevance
+- **Third Entity**: Description of role and relevance
+
+Example:
+- **Ebenezer Scrooge**: Central character whose transformation drives the story
+- **Bob Cratchit**: Employee whose situation reflects social conditions
+- **Tiny Tim**: Symbol of innocence and catalyst for change
+- **Jacob Marley**: Deceased partner who initiates Scrooge's journey
 
 **3. Major Causal Pathways**
 Identify and describe the primary causal chains observed in the network data. For each causal relationship, use the following format with arrow notation (→) to clearly show cause-to-effect direction:
