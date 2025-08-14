@@ -4,4 +4,12 @@
     "name": "A Christmas Carol",
     "description": "Getting Started index of the novel A Christmas Carol",
     "community_level": 3
-}]
+},
+{
+    "key": "ragtest-sas",
+    "path": "ragsas",
+    "name": "casecon",
+    "description": "Getting Started index of the casecon dataset",
+    "community_level": 2
+}
+]
