@@ -374,6 +374,7 @@ class CausalAnalysisDefaults:
     enabled: bool = True
     prompt: None = None
     max_analysis_length: int = 2000
+    max_input_tokens: int = 100_000
     model_id: str = DEFAULT_CHAT_MODEL_ID
 
 

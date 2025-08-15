@@ -127,7 +127,7 @@ causal_analysis:
   enabled: true  # Enable/disable causal analysis workflow
   model_id: default_chat_model  # Which LLM to use for analysis
   prompt: "prompts/causal_analysis.txt"  # Custom prompt file (optional)
-  max_analysis_length: full  # Maximum length of generated report (prevents truncation)
+  max_analysis_length: 25000  # Maximum length of generated report (prevents truncation)
   # Use "full" for unlimited length, or specify a number (e.g., 8000, 12000, 20000)
   # Note: "full" will use the LLM's maximum token limit, which may vary by model
   

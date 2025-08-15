@@ -9,6 +9,7 @@ from typing import Any, Union
 
 import networkx as nx
 import pandas as pd
+import tiktoken
 
 from graphrag.language_model.protocol.base import ChatModel
 from graphrag.prompts.index.causal_analysis import CAUSAL_ANALYSIS_PROMPT
@@ -42,17 +43,20 @@ class CausalAnalyzer:
     _model: ChatModel
     _analysis_prompt: str
     _max_analysis_length: Union[int, str]
+    _max_input_tokens: int
 
     def __init__(
         self,
         model_invoker: ChatModel,
         prompt: str | None = None,
         max_analysis_length: Union[int, str] = 2000,
+        max_input_tokens: int = 100_000,
     ):
         """Init method definition."""
         self._model = model_invoker
         self._analysis_prompt = prompt or CAUSAL_ANALYSIS_PROMPT
         self._max_analysis_length = max_analysis_length
+        self._max_input_tokens = max_input_tokens
         
         # Validate max_analysis_length
         if isinstance(max_analysis_length, str) and max_analysis_length.lower() != "full":
@@ -67,6 +71,16 @@ class CausalAnalyzer:
     def max_length(self) -> Union[int, str]:
         """Get the maximum analysis length setting."""
         return self._max_analysis_length
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate the number of tokens in a text string."""
+        try:
+            # Use tiktoken to get accurate token count
+            encoding = tiktoken.encoding_for_model("gpt-4")
+            return len(encoding.encode(text))
+        except Exception:
+            # Fallback to character-based estimation (4 chars ≈ 1 token)
+            return len(text) // 4
 
     async def __call__(
         self, 
@@ -104,7 +118,7 @@ class CausalAnalyzer:
         entities: pd.DataFrame, 
         relationships: pd.DataFrame
     ) -> str:
-        """Prepare graph data for causal analysis."""
+        """Prepare graph data for causal analysis with token limits."""
         # Extract key graph information
         nodes_info = []
         for node, data in graph.nodes(data=True):
@@ -112,10 +126,13 @@ class CausalAnalyzer:
                 'id': node,
                 'type': data.get('type', ''),
                 'description': data.get('description', ''),
-                'degree': graph.degree(node),
+                'degree': len(list(graph.neighbors(node))),  # Fix the degree calculation
                 'centrality': nx.degree_centrality(graph).get(node, 0),
             }
             nodes_info.append(node_info)
+        
+        # Sort nodes by centrality (most important first)
+        nodes_info.sort(key=lambda x: x['centrality'], reverse=True)
         
         edges_info = []
         for source, target, data in graph.edges(data=True):
@@ -127,20 +144,56 @@ class CausalAnalyzer:
             }
             edges_info.append(edge_info)
         
-        # Format as structured text
+        # Sort edges by weight (most important first)
+        edges_info.sort(key=lambda x: x['weight'], reverse=True)
+        
+        # Build graph data incrementally while checking token limits
         graph_data = "=== ENTITIES ===\n"
+        current_tokens = self._estimate_tokens(graph_data)
+        
+        # Reserve tokens for the prompt template and relationships section
+        reserved_tokens = 5000  # Reserve space for prompt template and relationships header
+        available_tokens = self._max_input_tokens - reserved_tokens
+        
+        # Add entities while staying within token limit
+        entities_added = 0
         for node in nodes_info:
-            graph_data += f"Entity: {node['id']}\n"
-            graph_data += f"  Type: {node['type']}\n"
-            graph_data += f"  Description: {node['description']}\n"
-            graph_data += f"  Degree: {node['degree']}\n"
-            graph_data += f"  Centrality: {node['centrality']:.3f}\n\n"
+            node_text = f"Entity: {node['id']}\n"
+            node_text += f"  Type: {node['type']}\n"
+            node_text += f"  Description: {node['description']}\n"
+            node_text += f"  Degree: {node['degree']}\n"
+            node_text += f"  Centrality: {node['centrality']:.3f}\n\n"
+            
+            node_tokens = self._estimate_tokens(node_text)
+            if current_tokens + node_tokens > available_tokens // 2:  # Use half tokens for entities
+                logger.warning(f"Reached token limit for entities. Including {entities_added} out of {len(nodes_info)} entities.")
+                break
+                
+            graph_data += node_text
+            current_tokens += node_tokens
+            entities_added += 1
         
         graph_data += "=== RELATIONSHIPS ===\n"
+        current_tokens = self._estimate_tokens(graph_data)
+        
+        # Add relationships while staying within remaining token limit
+        relationships_added = 0
         for edge in edges_info:
-            graph_data += f"From: {edge['source']} -> To: {edge['target']}\n"
-            graph_data += f"  Weight: {edge['weight']}\n"
-            graph_data += f"  Description: {edge['description']}\n\n"
+            edge_text = f"From: {edge['source']} -> To: {edge['target']}\n"
+            edge_text += f"  Weight: {edge['weight']}\n"
+            edge_text += f"  Description: {edge['description']}\n\n"
+            
+            edge_tokens = self._estimate_tokens(edge_text)
+            if current_tokens + edge_tokens > available_tokens:
+                logger.warning(f"Reached token limit for relationships. Including {relationships_added} out of {len(edges_info)} relationships.")
+                break
+                
+            graph_data += edge_text
+            current_tokens += edge_tokens
+            relationships_added += 1
+        
+        final_tokens = self._estimate_tokens(graph_data)
+        logger.info(f"Prepared graph data with {entities_added} entities and {relationships_added} relationships ({final_tokens} estimated tokens)")
         
         return graph_data
 

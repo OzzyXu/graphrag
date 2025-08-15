@@ -31,6 +31,12 @@ class CausalAnalysisConfig(BaseModel):
     )
     """The maximum length of the causal analysis report. Use 'full' for unlimited length, or specify a number."""
 
+    max_input_tokens: int = Field(
+        description="The maximum number of input tokens to send to the model to prevent context overflow.",
+        default=defs.graphrag_config_defaults.causal_analysis.max_input_tokens,
+    )
+    """The maximum number of input tokens to send to the model to prevent context overflow."""
+
     model_id: str = Field(
         description="The model ID to use for causal analysis.",
         default=defs.graphrag_config_defaults.causal_analysis.model_id,
