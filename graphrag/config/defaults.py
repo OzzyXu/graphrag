@@ -317,6 +317,21 @@ class LocalSearchDefaults:
 
 
 @dataclass
+class CausalSearchDefaults:
+    """Default values for causal search."""
+
+    prompt: None = None
+    s_parameter: int = 3  # Additional nodes beyond local search
+    top_k_mapped_entities: int = 10  # Number of entities to retrieve from embedding store
+    top_k_relationships: int = 10    # Number of relationships to retrieve per entity
+    text_unit_prop: float = 0.5      # Proportion of context for text units
+    community_prop: float = 0.25     # Proportion of context for community reports
+    max_context_tokens: int = 12_000 # Maximum context window size
+    chat_model_id: str = DEFAULT_CHAT_MODEL_ID
+    embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID
+
+
+@dataclass
 class OutputDefaults(StorageDefaults):
     """Default values for output."""
 
@@ -367,15 +382,7 @@ class SummarizeDescriptionsDefaults:
     model_id: str = DEFAULT_CHAT_MODEL_ID
 
 
-@dataclass
-class CausalAnalysisDefaults:
-    """Default values for causal analysis."""
 
-    enabled: bool = True
-    prompt: None = None
-    max_analysis_length: int = 2000
-    max_input_tokens: int = 100_000
-    model_id: str = DEFAULT_CHAT_MODEL_ID
 
 
 @dataclass
@@ -438,7 +445,7 @@ class GraphRagConfigDefaults:
     extract_claims: ExtractClaimsDefaults = field(default_factory=ExtractClaimsDefaults)
     prune_graph: PruneGraphDefaults = field(default_factory=PruneGraphDefaults)
     cluster_graph: ClusterGraphDefaults = field(default_factory=ClusterGraphDefaults)
-    causal_analysis: CausalAnalysisDefaults = field(default_factory=CausalAnalysisDefaults)
+    causal_search: CausalSearchDefaults = field(default_factory=CausalSearchDefaults)
     umap: UmapDefaults = field(default_factory=UmapDefaults)
     local_search: LocalSearchDefaults = field(default_factory=LocalSearchDefaults)
     global_search: GlobalSearchDefaults = field(default_factory=GlobalSearchDefaults)

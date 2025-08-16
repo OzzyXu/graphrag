@@ -1,1 +1,29 @@
+# First
 OK. Now let's do some big updates for the project. What I would like to do is a overhaul for the causal-analysis workflow I added. Here is the thing I plan to do. 1. Remove the causal-analysis workflow. We may be able to keep some components depending on the next a few steps.  2. I want to add a new search method called causal_search. The search works like the following: first, suppose the the local_search extracts top-k nodes based on the users query, the causal_search has a parameter s, then the causal_search will extract k+s nodes. Second, utilize the local_search workflow existing components to extract other graph information like relationship in the local search. Third, after extracting all the graph information, use the prompt stored in /Users/chuan/Projects/graphrag/causal_discovery_prompt.txt to create a causal report. The graph information extracted before should be attached to the ---Network Data--- part of the prompt. 4. Use the prompt stored in /Users/chuan/Projects/graphrag/causal_summary_report.txt to create the response for users' query. The causal summary report should be attached to the ---Causal Summary--- part of the prompt. 5. The workflow should also be able to take user given causal summary as input. So you need to output the extracted graph information in the causal_search method somewhere. During the overhaul, the added causal_search method should have corresponding control parameter like s mentioned before, and other things like context length. Analyse my plan first. After checking the code, list your plan step by step or give me a todo list. Proceed with the plan after I approve it. If you have any questions and needs clarification, please ask me.
+
+# Second
+To your questions,
+1. Give a global default value 3, but the user should also be able to set the value in settings.yaml.
+2. Yes.
+3. Nice formatted JSON is preferred. 
+4. Just report the method failed and terminate. Throw the right error and add corresponding logger information.
+5. It's OK to do it sequentially. So far, choose the simple and reliable way for the whole implementation. Performance is not the top issue so far. 
+6. No need to cache anything now.
+
+Before you proceed, first, explain to me in more details about how you would like to " Implement Core Causal Search Logic"
+
+# Third
+Yes, it looks good to me. One thing I didn't see in your respond is the searching should be OK to run in a two-step way. It first returns me the extracted graph information, and a ready-to-send query so I can use some other advanced models to generate the causal summary. At the second step, the flow takes the summary and generate the response for users' query.
+A few addition requirements.
+1. Make frequent commits after you think you have done enough jobs, e.g., done after a step or a item in the to-do list. It's OK to commit or often if a step contains too much jobs. The commit message should contain concise but enough information for me to check what you have done.
+2. Output the graph context attached to the causal_discovery_prompt.
+3. Output the report created by causal_discovery_prompt in Markdown format. 
+4. Store the above outputs under the data_folder/outputs folder like in the other workflow. 
+5. Same as before, output the used prompts under data_folder/prompts like in the other workflow.
+6. Remember, the new method should have control parameters like """# Retrieval breadth control parameters
+  top_k_mapped_entities: 10  # Number of entities to retrieve from embedding store
+  top_k_relationships: 10    # Number of relationships to retrieve per entity
+  text_unit_prop: 0.5        # Proportion of context for text units
+  community_prop: 0.25       # Proportion of context for community reports
+  max_context_tokens: 12000  # Maximum context window size "". Adjust based on your judgement. 
+   

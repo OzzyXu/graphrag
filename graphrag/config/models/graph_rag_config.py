@@ -14,7 +14,7 @@ from graphrag.config.defaults import graphrag_config_defaults
 from graphrag.config.errors import LanguageModelConfigMissingError
 from graphrag.config.models.basic_search_config import BasicSearchConfig
 from graphrag.config.models.cache_config import CacheConfig
-from graphrag.config.models.causal_analysis_config import CausalAnalysisConfig
+from graphrag.config.models.causal_search_config import CausalSearchConfig
 from graphrag.config.models.chunking_config import ChunkingConfig
 from graphrag.config.models.cluster_graph_config import ClusterGraphConfig
 from graphrag.config.models.community_reports_config import CommunityReportsConfig
@@ -241,11 +241,11 @@ class GraphRagConfig(BaseModel):
     )
     """The cluster graph configuration to use."""
 
-    causal_analysis: CausalAnalysisConfig = Field(
-        description="The causal analysis configuration to use.",
-        default=CausalAnalysisConfig(),
+    causal_search: CausalSearchConfig = Field(
+        description="The causal search configuration to use.",
+        default=CausalSearchConfig(),
     )
-    """The causal analysis configuration to use."""
+    """The causal search configuration to use."""
 
     extract_claims: ClaimExtractionConfig = Field(
         description="The claim extraction configuration to use.",
