@@ -34,6 +34,7 @@ from graphrag.query.structured_search.local_search.mixed_context import (
     LocalSearchMixedContext,
 )
 from graphrag.query.structured_search.local_search.search import LocalSearch
+from graphrag.query.structured_search.causal_search.search import CausalSearch
 from graphrag.vector_stores.base import BaseVectorStore
 
 
@@ -301,4 +302,76 @@ def get_basic_search_engine(
             "max_context_tokens": bs_config.max_context_tokens,
         },
         callbacks=callbacks,
+    )
+
+
+
+def get_causal_search_engine(
+    config: GraphRagConfig,
+    reports: list[CommunityReport],
+    text_units: list[TextUnit],
+    entities: list[Entity],
+    relationships: list[Relationship],
+    covariates: dict[str, list[Covariate]],
+    response_type: str,
+    description_embedding_store: BaseVectorStore,
+    system_prompt: str | None = None,
+    callbacks: list[QueryCallbacks] | None = None,
+) -> CausalSearch:
+    """Create a causal search engine based on data + configuration."""
+    model_settings = config.get_language_model_config(config.causal_search.chat_model_id)
+
+    chat_model = ModelManager().get_or_create_chat_model(
+        name="causal_search_chat",
+        model_type=model_settings.type,
+        config=model_settings,
+    )
+
+    embedding_settings = config.get_language_model_config(
+        config.causal_search.embedding_model_id
+    )
+
+    embedding_model = ModelManager().get_or_create_embedding_model(
+        name="causal_search_embedding",
+        model_type=embedding_settings.type,
+        config=embedding_settings,
+    )
+
+    token_encoder = tiktoken.get_encoding(model_settings.encoding_model)
+
+    cs_config = config.causal_search
+
+    model_params = get_openai_model_parameters_from_config(model_settings)
+
+    return CausalSearch(
+        model=chat_model,
+        system_prompt=system_prompt,
+        context_builder=LocalSearchMixedContext(
+            community_reports=reports,
+            text_embedder=embedding_model,
+            text_units=text_units,
+            entities=entities,
+            relationships=relationships,
+            covariates=covariates,
+            entity_text_embeddings=description_embedding_store,
+            embedding_vectorstore_key=EntityVectorStoreKey.ID,
+            token_encoder=token_encoder,
+        ),
+        token_encoder=token_encoder,
+        model_params=model_params,
+        context_builder_params={
+            "text_unit_prop": cs_config.text_unit_prop,
+            "community_prop": cs_config.community_prop,
+            "top_k_mapped_entities": cs_config.top_k_mapped_entities,
+            "top_k_relationships": cs_config.top_k_relationships,
+            "include_entity_rank": True,
+            "include_relationship_weight": True,
+            "include_community_rank": False,
+            "return_candidate_context": False,
+            "max_context_tokens": cs_config.max_context_tokens,
+        },
+        response_type=response_type,
+        callbacks=callbacks,
+        s_parameter=cs_config.s_parameter,
+        max_context_tokens=cs_config.max_context_tokens,
     )
