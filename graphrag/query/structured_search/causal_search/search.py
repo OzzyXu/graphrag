@@ -74,7 +74,7 @@ class CausalSearch(BaseSearch[LocalContextBuilder]):
     def _load_causal_discovery_prompt(self) -> str:
         """Load the causal discovery prompt template."""
         try:
-            from graphrag.prompts.query.causal_search import CAUSAL_DISCOVERY_PROMPT
+            from graphrag.prompts.query import CAUSAL_DISCOVERY_PROMPT
             logger.info("Loaded causal discovery prompt from GraphRAG prompts")
             return CAUSAL_DISCOVERY_PROMPT
         except ImportError:
@@ -87,7 +87,7 @@ class CausalSearch(BaseSearch[LocalContextBuilder]):
     def _load_causal_summary_prompt(self) -> str:
         """Load the causal summary prompt template."""
         try:
-            from graphrag.prompts.query.causal_search import CAUSAL_SUMMARY_PROMPT
+            from graphrag.prompts.query import CAUSAL_SUMMARY_PROMPT
             logger.info("Loaded causal summary prompt from GraphRAG prompts")
             return CAUSAL_SUMMARY_PROMPT
         except ImportError:

@@ -181,7 +181,7 @@ def test_prompt_loading():
     
     try:
         # Test importing prompts
-        from graphrag.prompts.query.causal_search import CAUSAL_DISCOVERY_PROMPT, CAUSAL_SUMMARY_PROMPT
+        from graphrag.prompts.query import CAUSAL_DISCOVERY_PROMPT, CAUSAL_SUMMARY_PROMPT
         
         # Check prompt content
         if not CAUSAL_DISCOVERY_PROMPT or len(CAUSAL_DISCOVERY_PROMPT.strip()) < 100:
