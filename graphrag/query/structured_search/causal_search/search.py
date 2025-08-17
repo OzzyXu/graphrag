@@ -265,10 +265,30 @@ Add sections and commentary to the response as appropriate for the length and fo
         **kwargs
     ) -> list:
         """Get the normal local search nodes."""
-        # This would use the same logic as local search for entity mapping
-        # For now, return a placeholder - this needs to be implemented based on
-        # how local search actually extracts entities
-        return []
+        try:
+            # Use the context builder to get local search nodes
+            # This mimics the local search entity extraction process
+            context_result = self.context_builder.build_context(
+                query=query,
+                **self.context_builder_params
+            )
+            
+            # Extract entity IDs from the context
+            if hasattr(context_result, 'context_records') and context_result.context_records:
+                # Look for entities in the context records
+                entities = context_result.context_records.get('entities', [])
+                if entities and len(entities) > 0:
+                    # Extract entity IDs from the DataFrame
+                    entity_ids = entities['id'].tolist() if 'id' in entities.columns else []
+                    logger.info(f"Extracted {len(entity_ids)} local search nodes")
+                    return entity_ids
+            
+            logger.warning("No entities found in local search context")
+            return []
+            
+        except Exception as e:
+            logger.error(f"Failed to get local search nodes: {e}")
+            return []
 
     async def _get_additional_causal_nodes(
         self, 
@@ -276,9 +296,16 @@ Add sections and commentary to the response as appropriate for the length and fo
         **kwargs
     ) -> list:
         """Get additional s nodes for causal analysis."""
-        # This would implement additional node extraction logic
-        # For now, return a placeholder
-        return []
+        try:
+            # For now, return an empty list as this is a placeholder
+            # In a full implementation, this would extract additional nodes
+            # based on causal analysis heuristics
+            logger.info(f"Additional causal nodes extraction not yet implemented, returning empty list")
+            return []
+            
+        except Exception as e:
+            logger.error(f"Failed to get additional causal nodes: {e}")
+            return []
 
     async def _extract_graph_information(
         self, 
@@ -287,9 +314,15 @@ Add sections and commentary to the response as appropriate for the length and fo
     ) -> Any:
         """Reuse local search components to extract graph information."""
         try:
-            # This would reuse existing local search context building logic
-            # For now, return a placeholder
-            return None
+            # Use the context builder to extract graph information
+            # This reuses the local search context building logic
+            context_result = self.context_builder.build_context(
+                query="",  # Empty query since we already have selected nodes
+                **self.context_builder_params
+            )
+            
+            logger.info(f"Extracted graph information with context length: {len(context_result.context_chunks) if context_result.context_chunks else 0}")
+            return context_result
             
         except Exception as e:
             logger.error(f"Failed to extract graph information: {e}")
@@ -331,8 +364,10 @@ Add sections and commentary to the response as appropriate for the length and fo
                 model_parameters=self.model_params
             )
             
-            logger.info(f"Generated causal report of length {len(response)}")
-            return response
+            # Extract content from response
+            response_content = response.content if hasattr(response, 'content') else str(response)
+            logger.info(f"Generated causal report of length {len(response_content)}")
+            return response_content
             
         except Exception as e:
             logger.error(f"Causal discovery failed: {e}")
@@ -356,8 +391,10 @@ Add sections and commentary to the response as appropriate for the length and fo
                 model_parameters=self.model_params
             )
             
-            logger.info(f"Generated final response of length {len(response)}")
-            return response
+            # Extract content from response
+            response_content = response.content if hasattr(response, 'content') else str(response)
+            logger.info(f"Generated final response of length {len(response_content)}")
+            return response_content
             
         except Exception as e:
             logger.error(f"Response generation failed: {e}")

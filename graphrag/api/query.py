@@ -1209,3 +1209,325 @@ async def multi_index_basic_search(
         query=query,
         callbacks=callbacks,
     )
+
+
+@validate_call(config={"arbitrary_types_allowed": True})
+async def causal_search(
+    config: GraphRagConfig,
+    entities: pd.DataFrame,
+    relationships: pd.DataFrame,
+    text_units: pd.DataFrame,
+    community_reports: pd.DataFrame,
+    covariates: dict[str, pd.DataFrame],
+    query: str,
+    callbacks: list[QueryCallbacks] | None = None,
+    verbose: bool = False,
+) -> tuple[
+    str | dict[str, Any] | list[dict[str, Any]],
+    str | list[pd.DataFrame] | dict[str, pd.DataFrame],
+]:
+    """Perform a causal search and return the context data and response.
+
+    Parameters
+    ----------
+    - config (GraphRagConfig): A graphrag configuration (from settings.yaml)
+    - entities (pd.DataFrame): A DataFrame containing the final entities (from entities.parquet)
+    - relationships (pd.DataFrame): A DataFrame containing the final relationships (from relationships.parquet)
+    - text_units (pd.DataFrame): A DataFrame containing the final text units (from text_units.parquet)
+    - community_reports (pd.DataFrame): A DataFrame containing the final community reports (from community_reports.parquet)
+    - covariates (dict[str, pd.DataFrame]): A dictionary containing the final covariates (from covariates.parquet)
+    - query (str): The user query to search for.
+    - callbacks (list[QueryCallbacks] | None): A list of callbacks to register.
+    - verbose (bool): Whether to enable verbose logging.
+
+    Returns
+    -------
+    tuple[str | dict[str, Any] | list[dict[str, Any]], str | list[pd.DataFrame] | dict[str, pd.DataFrame]]
+        A tuple containing the search response and context data.
+    """
+    init_loggers(config=config, verbose=verbose)
+
+    callbacks = callbacks or []
+    full_response = ""
+    context_data = {}
+
+    # Convert DataFrames to lists of objects
+    entities_list = read_indexer_entities(entities)
+    relationships_list = read_indexer_relationships(relationships)
+    text_units_list = read_indexer_text_units(text_units)
+    community_reports_list = read_indexer_reports(community_reports)
+    covariates_dict = {}
+    for covariate_name, covariate_df in covariates.items():
+        covariates_dict[covariate_name] = read_indexer_covariates(covariate_df)
+
+    # Get vector store configuration
+    vector_store_args = {}
+    for index, store in config.vector_store.items():
+        vector_store_args[index] = store.model_dump()
+    msg = f"Vector Store Args: {redact(vector_store_args)}"
+    logger.debug(msg)
+
+    # Get embedding stores
+    entity_embedding_store = get_embedding_store(
+        config_args=vector_store_args,
+        embedding_name=entity_description_embedding,
+    )
+
+    # Get causal search engine
+    from graphrag.query.factory import get_causal_search_engine
+    search_engine = get_causal_search_engine(
+        config=config,
+        reports=community_reports_list,
+        text_units=text_units_list,
+        entities=entities_list,
+        relationships=relationships_list,
+        covariates=covariates_dict,
+        response_type=response_type,
+        description_embedding_store=entity_embedding_store,
+        system_prompt=None,
+        callbacks=callbacks,
+    )
+
+    logger.debug("Executing causal search query: %s", query)
+    response, context_records = await search_engine.search(query=query)
+    
+    # Update context data with the response
+    context_data = update_context_data(context_records, context_data)
+    
+    return response, context_data
+
+
+@validate_call(config={"arbitrary_types_allowed": True})
+def causal_search_streaming(
+    config: GraphRagConfig,
+    entities: pd.DataFrame,
+    relationships: pd.DataFrame,
+    text_units: pd.DataFrame,
+    community_reports: pd.DataFrame,
+    covariates: dict[str, pd.DataFrame],
+    query: str,
+    response_type: str = "Multiple Paragraphs",
+    callbacks: list[QueryCallbacks] | None = None,
+    verbose: bool = False,
+) -> AsyncGenerator[str, None]:
+    """Perform a streaming causal search and return the response.
+
+    Parameters
+    ----------
+    - config (GraphRagConfig): A graphrag configuration (from settings.yaml)
+    - entities (pd.DataFrame): A DataFrame containing the final entities (from entities.parquet)
+    - relationships (pd.DataFrame): A DataFrame containing the final relationships (from relationships.parquet)
+    - text_units (pd.DataFrame): A DataFrame containing the final text units (from text_units.parquet)
+    - community_reports (pd.DataFrame): A DataFrame containing the final community reports (from community_reports.parquet)
+    - covariates (dict[str, pd.DataFrame]): A dictionary containing the final covariates (from covariates.parquet)
+    - query (str): The user query to search for.
+    - callbacks (list[QueryCallbacks] | None): A list of callbacks to register.
+    - verbose (bool): Whether to enable verbose logging.
+
+    Returns
+    -------
+    AsyncGenerator[str, None]
+        A generator that yields the streaming response.
+    """
+    init_loggers(config=config, verbose=verbose)
+
+    # Get vector store configuration
+    vector_store_args = {}
+    for index, store in config.vector_store.items():
+        vector_store_args[index] = store.model_dump()
+    msg = f"Vector Store Args: {redact(vector_store_args)}"
+    logger.debug(msg)
+
+    # Convert DataFrames to lists of objects
+    entities_list = read_indexer_entities(entities)
+    relationships_list = read_indexer_relationships(relationships)
+    text_units_list = read_indexer_text_units(text_units)
+    community_reports_list = read_indexer_reports(community_reports)
+    covariates_dict = {}
+    for covariate_name, covariate_df in covariates.items():
+        covariates_dict[covariate_name] = read_indexer_covariates(covariate_df)
+
+    # Get embedding stores
+    entity_embedding_store = get_embedding_store(
+        config_args=vector_store_args,
+        embedding_name=entity_description_embedding,
+    )
+
+    # Get causal search engine
+    from graphrag.query.factory import get_causal_search_engine
+    search_engine = get_causal_search_engine(
+        config=config,
+        reports=community_reports_list,
+        text_units=text_units_list,
+        entities=entities_list,
+        relationships=relationships_list,
+        covariates=covariates_dict,
+        response_type=response_type,
+        description_embedding_store=entity_embedding_store,
+        system_prompt=None,
+        callbacks=callbacks,
+    )
+
+    logger.debug("Executing streaming causal search query: %s", query)
+    return search_engine.stream_search(query=query)
+
+
+@validate_call(config={"arbitrary_types_allowed": True})
+async def multi_index_causal_search(
+    config: GraphRagConfig,
+    entities_list: list[pd.DataFrame],
+    relationships_list: list[pd.DataFrame],
+    text_units_list: list[pd.DataFrame],
+    community_reports_list: list[pd.DataFrame],
+    covariates_list: list[dict[str, pd.DataFrame]],
+    index_names: list[str],
+    streaming: bool,
+    query: str,
+    callbacks: list[QueryCallbacks] | None = None,
+    verbose: bool = False,
+) -> tuple[
+    str | dict[str, Any] | list[dict[str, Any]],
+    str | list[pd.DataFrame] | dict[str, pd.DataFrame],
+]:
+    """Perform a causal search across multiple indexes and return the context data and response.
+
+    Parameters
+    ----------
+    - config (GraphRagConfig): A graphrag configuration (from settings.yaml)
+    - entities_list (list[pd.DataFrame]): A list of DataFrames containing the final entities (from entities.parquet)
+    - relationships_list (list[pd.DataFrame]): A list of DataFrames containing the final relationships (from relationships.parquet)
+    - text_units_list (list[pd.DataFrame]): A list of DataFrames containing the final text units (from text_units.parquet)
+    - community_reports_list (list[pd.DataFrame]): A list of DataFrames containing the final community reports (from community_reports.parquet)
+    - covariates_list (list[dict[str, pd.DataFrame]]): A list of dictionaries containing the final covariates (from covariates.parquet)
+    - index_names (list[str]): A list of index names.
+    - streaming (bool): Whether to stream the results or not.
+    - query (str): The user query to search for.
+    - callbacks (list[QueryCallbacks] | None): A list of callbacks to register.
+    - verbose (bool): Whether to enable verbose logging.
+
+    Returns
+    -------
+    tuple[str | dict[str, Any] | list[dict[str, Any]], str | list[pd.DataFrame] | dict[str, pd.DataFrame]]
+        A tuple containing the search response and context data.
+    """
+    init_loggers(config=config, verbose=verbose)
+
+    # Streaming not supported yet
+    if streaming:
+        message = "Streaming not yet implemented for multi_causal_search"
+        raise NotImplementedError(message)
+
+    # Prepare data structures for merging
+    links = {
+        "entities": {},
+        "relationships": {},
+        "text_units": {},
+        "community_reports": {},
+        "covariates": {},
+    }
+    max_vals = {
+        "entities": 0,
+        "relationships": 0,
+        "text_units": 0,
+        "community_reports": 0,
+        "covariates": 0,
+    }
+
+    entities_dfs = []
+    relationships_dfs = []
+    text_units_dfs = []
+    community_reports_dfs = []
+    covariates_dfs = []
+
+    for idx, index_name in enumerate(index_names):
+        # Prepare entities
+        entities_df = entities_list[idx]
+        for i in range(entities_df.shape[0]):
+            links["entities"][i + max_vals["entities"]] = {
+                "index_name": index_name,
+                "id": i,
+            }
+        entities_df["id"] = entities_df["id"].apply(
+            lambda x, index_name=index_name: f"{x}-{index_name}"
+        )
+        max_vals["entities"] += entities_df.shape[0]
+        entities_dfs.append(entities_df)
+
+        # Prepare relationships
+        relationships_df = relationships_list[idx]
+        for i in range(relationships_df.shape[0]):
+            links["relationships"][i + max_vals["relationships"]] = {
+                "index_name": index_name,
+                "id": i,
+            }
+        relationships_df["id"] = relationships_df["id"].apply(
+            lambda x, index_name=index_name: f"{x}-{index_name}"
+        )
+        max_vals["relationships"] += relationships_df.shape[0]
+        relationships_dfs.append(relationships_df)
+
+        # Prepare text units
+        text_units_df = text_units_list[idx]
+        for i in range(text_units_df.shape[0]):
+            links["text_units"][i + max_vals["text_units"]] = {
+                "index_name": index_name,
+                "id": i,
+            }
+        text_units_df["id"] = text_units_df["id"].apply(
+            lambda x, index_name=index_name: f"{x}-{index_name}"
+        )
+        max_vals["text_units"] += text_units_df.shape[0]
+        text_units_dfs.append(text_units_df)
+
+        # Prepare community reports
+        community_reports_df = community_reports_list[idx]
+        for i in range(community_reports_df.shape[0]):
+            links["community_reports"][i + max_vals["community_reports"]] = {
+                "index_name": index_name,
+                "id": i,
+            }
+        community_reports_df["id"] = community_reports_df["id"].apply(
+            lambda x, index_name=index_name: f"{x}-{index_name}"
+        )
+        max_vals["community_reports"] += community_reports_df.shape[0]
+        community_reports_dfs.append(community_reports_df)
+
+        # Prepare covariates
+        covariates_df = covariates_list[idx]
+        for covariate_name, covariate_data in covariates_df.items():
+            if covariate_name not in links["covariates"]:
+                links["covariates"][covariate_name] = {}
+            for i in range(covariate_data.shape[0]):
+                links["covariates"][covariate_name][i + max_vals["covariates"]] = {
+                    "index_name": index_name,
+                    "id": i,
+                }
+            covariate_data["id"] = covariate_data["id"].apply(
+                lambda x, index_name=index_name: f"{x}-{index_name}"
+            )
+        max_vals["covariates"] += sum(covariate_data.shape[0] for covariate_data in covariates_df.values())
+        covariates_dfs.append(covariates_df)
+
+    # Merge the dataframes
+    entities_combined = pd.concat(entities_dfs, axis=0, ignore_index=True, sort=False)
+    relationships_combined = pd.concat(relationships_dfs, axis=0, ignore_index=True, sort=False)
+    text_units_combined = pd.concat(text_units_dfs, axis=0, ignore_index=True, sort=False)
+    community_reports_combined = pd.concat(community_reports_dfs, axis=0, ignore_index=True, sort=False)
+    
+    # Merge covariates
+    covariates_combined = {}
+    for covariate_name in covariates_list[0].keys():
+        covariate_dfs = [covariates_df[covariate_name] for covariates_df in covariates_dfs]
+        covariates_combined[covariate_name] = pd.concat(covariate_dfs, axis=0, ignore_index=True, sort=False)
+
+    logger.debug("Executing multi-index causal search query: %s", query)
+    return await causal_search(
+        config,
+        entities=entities_combined,
+        relationships=relationships_combined,
+        text_units=text_units_combined,
+        community_reports=community_reports_combined,
+        covariates=covariates_combined,
+        query=query,
+        callbacks=callbacks,
+    )
