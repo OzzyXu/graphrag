@@ -26,4 +26,13 @@ A few addition requirements.
   text_unit_prop: 0.5        # Proportion of context for text units
   community_prop: 0.25       # Proportion of context for community reports
   max_context_tokens: 12000  # Maximum context window size "". Adjust based on your judgement. 
-   
+
+# Fourth
+I have a few questions regarding the work you have done.
+1. What prompts do you use for the causal_search method? Where do you store them? Did you store them under /Users/chuan/Projects/graphrag/graphrag/prompts/query like other workflows and call them from there?
+2. GraphRAG supports running in CLI method like "graphrag query \
+--root ./ragtest \
+--method global \
+--query "What are the top themes in this story?"". Add a "causal" method for the CLI mode to use the causal_search.
+3. Have you document the document how to use the causal_search? If not, create a dedicated Markdown file to record how to use it, especially for things like inserting the causal summary report manually. 
+4. create a Jupyter notebook under /Users/chuan/Projects/graphrag/examples_notebooks\causalrag, the notebook will be similar to /Users/chuan/Projects/graphrag/examples_notebooks/community_contrib/yfiles-jupyter-graphs/graph-visualization.ipynb, but don't need to include those visualization parts. Just make it ready to demo a query and the context used.
