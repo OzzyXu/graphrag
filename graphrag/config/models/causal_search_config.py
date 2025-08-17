@@ -43,19 +43,19 @@ class CausalSearchConfig(BaseModel):
         description="The model ID to use for causal search.",
         default=graphrag_config_defaults.causal_search.chat_model_id,
     )
-               embedding_model_id: str = Field(
-               description="The embedding model ID to use for causal search.",
-               default=graphrag_config_defaults.causal_search.embedding_model_id,
-           )
-           save_network_data: bool = Field(
-               description="Whether to save extracted network data to files.",
-               default=graphrag_config_defaults.causal_search.save_network_data,
-           )
-           save_causal_report: bool = Field(
-               description="Whether to save causal analysis report to files.",
-               default=graphrag_config_defaults.causal_search.save_causal_report,
-           )
-           output_folder: str = Field(
-               description="Subfolder under data/outputs/ for causal search outputs.",
-               default=graphrag_config_defaults.causal_search.output_folder,
-           )
+    embedding_model_id: str = Field(
+        description="The embedding model ID to use for causal search.",
+        default=graphrag_config_defaults.causal_search.embedding_model_id,
+    )
+    save_network_data: bool = Field(
+        description="Whether to save extracted network data to files.",
+        default=graphrag_config_defaults.causal_search.save_network_data,
+    )
+    save_causal_report: bool = Field(
+        description="Whether to save causal analysis report to files.",
+        default=graphrag_config_defaults.causal_search.save_causal_report,
+    )
+    output_folder: str = Field(
+        description="Subfolder under data/outputs/ for causal search outputs.",
+        default=graphrag_config_defaults.causal_search.output_folder,
+    )
