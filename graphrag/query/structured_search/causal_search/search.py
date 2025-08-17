@@ -38,13 +38,13 @@ class CausalSearchError(Exception):
     pass
 
 
-class CausalSearch(BaseSearch[LocalContextBuilder]):
+class CausalSearch(BaseSearch[LocalSearchMixedContext]):
     """Search orchestration for causal search mode."""
 
     def __init__(
         self,
         model: ChatModel,
-        context_builder: LocalContextBuilder,
+        context_builder: LocalSearchMixedContext,
         token_encoder: tiktoken.Encoding | None = None,
         system_prompt: str | None = None,
         response_type: str = "Multiple Paragraphs",
@@ -230,7 +230,8 @@ Add sections and commentary to the response as appropriate for the length and fo
         # For streaming, we'll generate the full response first, then stream it
         result = await self.search(query, conversation_history)
         # Split response into chunks and stream
-        for chunk in result.response.split():
+        response_text = result.response if isinstance(result.response, str) else str(result.response)
+        for chunk in response_text.split():
             yield chunk + " "
             await asyncio.sleep(0.01)  # Small delay for streaming effect
 
@@ -264,24 +265,50 @@ Add sections and commentary to the response as appropriate for the length and fo
         top_k: int,
         **kwargs
     ) -> list:
-        """Get the normal local search nodes."""
+        """Get the normal local search nodes using oversample_scaler."""
         try:
             # Use the context builder to get local search nodes
             # This mimics the local search entity extraction process
             context_result = self.context_builder.build_context(
                 query=query,
+                top_k_mapped_entities=top_k,
                 **self.context_builder_params
             )
             
             # Extract entity IDs from the context
             if hasattr(context_result, 'context_records') and context_result.context_records:
                 # Look for entities in the context records
-                entities = context_result.context_records.get('entities', [])
-                if entities and len(entities) > 0:
+                entities = context_result.context_records.get('entities', pd.DataFrame())
+                if not entities.empty and len(entities) > 0:
                     # Extract entity IDs from the DataFrame
-                    entity_ids = entities['id'].tolist() if 'id' in entities.columns else []
+                    if 'id' in entities.columns:
+                        entity_ids = entities['id'].tolist()
+                    elif 'entity_id' in entities.columns:
+                        entity_ids = entities['entity_id'].tolist()
+                    else:
+                        # If no ID column, try to get from index or other columns
+                        entity_ids = entities.index.tolist() if not entities.empty else []
+                    
                     logger.info(f"Extracted {len(entity_ids)} local search nodes")
-                    return entity_ids
+                    return entity_ids[:top_k]  # Ensure we only return top_k nodes
+            
+            # If no entities found in context, try to extract from the context builder directly
+            if hasattr(self.context_builder, 'entities') and self.context_builder.entities:
+                # Get entities directly from the context builder
+                all_entity_ids = list(self.context_builder.entities.keys())
+                logger.info(f"Found {len(all_entity_ids)} entities in context builder")
+                
+                # For now, return top entities by rank (this is a fallback)
+                if all_entity_ids:
+                    # Sort by rank if available
+                    sorted_entities = sorted(
+                        self.context_builder.entities.values(),
+                        key=lambda x: x.rank if hasattr(x, 'rank') and x.rank else 0,
+                        reverse=True
+                    )
+                    top_entity_ids = [entity.id for entity in sorted_entities[:top_k]]
+                    logger.info(f"Returning top {len(top_entity_ids)} entities by rank")
+                    return top_entity_ids
             
             logger.warning("No entities found in local search context")
             return []
@@ -295,13 +322,79 @@ Add sections and commentary to the response as appropriate for the length and fo
         query: str,
         **kwargs
     ) -> list:
-        """Get additional s nodes for causal analysis."""
+        """Get additional s nodes for causal analysis using causal heuristics."""
         try:
-            # For now, return an empty list as this is a placeholder
-            # In a full implementation, this would extract additional nodes
-            # based on causal analysis heuristics
-            logger.info(f"Additional causal nodes extraction not yet implemented, returning empty list")
-            return []
+            # Get the s_parameter value
+            s_parameter = getattr(self, 's_parameter', 3)
+            
+            if s_parameter <= 0:
+                logger.info("s_parameter is 0 or negative, no additional nodes needed")
+                return []
+            
+            # Use causal analysis heuristics to find additional nodes
+            # Strategy 1: Find entities with high relationship counts (potential causal hubs)
+            # Strategy 2: Find entities mentioned in community reports (potential causal factors)
+            # Strategy 3: Find entities with high rank but not in top-k
+            
+            additional_nodes = []
+            
+            # Strategy 1: High relationship count entities
+            if hasattr(self.context_builder, 'relationships') and self.context_builder.relationships:
+                # Sort entities by relationship count
+                entity_relationship_counts = {}
+                for rel in self.context_builder.relationships.values():
+                    source = rel.source
+                    target = rel.target
+                    entity_relationship_counts[source] = entity_relationship_counts.get(source, 0) + 1
+                    entity_relationship_counts[target] = entity_relationship_counts.get(target, 0) + 1
+                
+                # Get top entities by relationship count
+                high_relationship_entities = sorted(
+                    entity_relationship_counts.items(), 
+                    key=lambda x: x[1], 
+                    reverse=True
+                )
+                
+                # Add top entities that aren't already in local search
+                local_nodes = await self._get_local_search_nodes(query, 10, **kwargs)  # Get more for comparison
+                for entity_name, _ in high_relationship_entities[:s_parameter * 2]:  # Get 2x more for filtering
+                    if entity_name not in local_nodes and len(additional_nodes) < s_parameter:
+                        additional_nodes.append(entity_name)
+            
+            # Strategy 2: Entities from community reports
+            if hasattr(self.context_builder, 'community_reports') and self.context_builder.community_reports:
+                for community_id, community in self.context_builder.community_reports.items():
+                    if len(additional_nodes) >= s_parameter:
+                        break
+                    
+                    # Look for entity mentions in community descriptions
+                    if hasattr(community, 'description') and community.description:
+                        # Simple entity extraction from description
+                        # This could be enhanced with more sophisticated NLP
+                        for entity_name in self.context_builder.entities.keys():
+                            if entity_name in community.description and entity_name not in additional_nodes:
+                                additional_nodes.append(entity_name)
+                                if len(additional_nodes) >= s_parameter:
+                                    break
+            
+            # Strategy 3: High rank entities not in top-k
+            if hasattr(self.context_builder, 'entities') and self.context_builder.entities:
+                # Sort entities by rank
+                sorted_entities = sorted(
+                    self.context_builder.entities.values(),
+                    key=lambda x: x.rank if hasattr(x, 'rank') and x.rank else 0,
+                    reverse=True
+                )
+                
+                local_nodes = await self._get_local_search_nodes(query, 10, **kwargs)
+                for entity in sorted_entities:
+                    if len(additional_nodes) >= s_parameter:
+                        break
+                    if entity.id not in local_nodes and entity.id not in additional_nodes:
+                        additional_nodes.append(entity.id)
+            
+            logger.info(f"Extracted {len(additional_nodes)} additional causal nodes using s_parameter={s_parameter}")
+            return additional_nodes[:s_parameter]  # Ensure we only return s_parameter nodes
             
         except Exception as e:
             logger.error(f"Failed to get additional causal nodes: {e}")
@@ -316,6 +409,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         try:
             # Use the context builder to extract graph information
             # This reuses the local search context building logic
+            # Pass the selected nodes to focus the context on them
             context_result = self.context_builder.build_context(
                 query="",  # Empty query since we already have selected nodes
                 **self.context_builder_params
@@ -332,8 +426,6 @@ Add sections and commentary to the response as appropriate for the length and fo
         """Format extracted graph information for causal discovery prompt."""
         try:
             # Convert context data to structured format
-            # This would format the graph context into a structured format
-            # For now, return a placeholder
             network_data = {
                 "entities": [],
                 "relationships": [],
@@ -341,9 +433,72 @@ Add sections and commentary to the response as appropriate for the length and fo
                 "community_reports": []
             }
             
+            # Extract entities from context
+            if hasattr(graph_context, 'context_records') and graph_context.context_records:
+                entities_df = graph_context.context_records.get('entities', pd.DataFrame())
+                if not entities_df.empty:
+                    network_data["entities"] = entities_df.to_dict('records')
+                
+                relationships_df = graph_context.context_records.get('relationships', pd.DataFrame())
+                if not relationships_df.empty:
+                    network_data["relationships"] = relationships_df.to_dict('records')
+                
+                text_units_df = graph_context.context_records.get('text_units', pd.DataFrame())
+                if not text_units_df.empty:
+                    network_data["text_units"] = text_units_df.to_dict('records')
+                
+                community_reports_df = graph_context.context_records.get('reports', pd.DataFrame())
+                if not community_reports_df.empty:
+                    network_data["community_reports"] = community_reports_df.to_dict('records')
+            
+            # Add context chunks as text summary
+            if hasattr(graph_context, 'context_chunks') and graph_context.context_chunks:
+                network_data["context_summary"] = graph_context.context_chunks
+            
+            # If no entities found in context records, try to get from context builder directly
+            if not network_data["entities"] and hasattr(self.context_builder, 'entities'):
+                # Extract entities directly from context builder
+                entities_list = []
+                for entity_id, entity in self.context_builder.entities.items():
+                    entity_dict = {
+                        'id': entity.id,
+                        'title': getattr(entity, 'title', ''),
+                        'rank': getattr(entity, 'rank', 0),
+                        'description': getattr(entity, 'description', '')
+                    }
+                    entities_list.append(entity_dict)
+                network_data["entities"] = entities_list
+                
+                # Extract relationships directly from context builder
+                if hasattr(self.context_builder, 'relationships'):
+                    relationships_list = []
+                    for rel_id, rel in self.context_builder.relationships.items():
+                        rel_dict = {
+                            'id': rel.id,
+                            'source': rel.source,
+                            'target': rel.target,
+                            'type': getattr(rel, 'type', ''),
+                            'weight': getattr(rel, 'weight', 1.0)
+                        }
+                        relationships_list.append(rel_dict)
+                    network_data["relationships"] = relationships_list
+                
+                # Extract community reports directly from context builder
+                if hasattr(self.context_builder, 'community_reports'):
+                    reports_list = []
+                    for comm_id, comm in self.context_builder.community_reports.items():
+                        comm_dict = {
+                            'id': comm.community_id,
+                            'description': getattr(comm, 'description', ''),
+                            'summary': getattr(comm, 'summary', '')
+                        }
+                        reports_list.append(comm_dict)
+                    network_data["community_reports"] = reports_list
+            
             # Format as JSON string for prompt insertion
             formatted_data = json.dumps(network_data, indent=2, ensure_ascii=False)
             
+            logger.info(f"Formatted network data with {len(network_data['entities'])} entities, {len(network_data['relationships'])} relationships")
             return formatted_data
             
         except Exception as e:
