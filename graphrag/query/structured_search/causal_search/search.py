@@ -364,27 +364,56 @@ Add sections and commentary to the response as appropriate for the length and fo
             raise CausalSearchError(f"Response generation stage failed: {e}")
 
     async def _save_outputs(self, network_data: str, causal_report: str, query: str):
-        """Save outputs to data folder."""
+        """Save outputs to data folder if enabled in configuration."""
         try:
-            # Create output directory
-            output_dir = Path("data/outputs")
-            output_dir.mkdir(parents=True, exist_ok=True)
+            # Check if output saving is enabled
+            if not hasattr(self, 'context_builder_params') or not self.context_builder_params:
+                logger.warning("No context builder params available, skipping output saving")
+                return
+                
+            save_network_data = self.context_builder_params.get('save_network_data', False)
+            save_causal_report = self.context_builder_params.get('save_causal_report', False)
+            output_folder = self.context_builder_params.get('output_folder', 'causal_search')
             
-            # Save network data
-            with open(output_dir / "causal_search_network_data.json", "w", encoding="utf-8") as f:
-                f.write(network_data)
+            if not save_network_data and not save_causal_report:
+                logger.info("Output saving disabled in configuration")
+                return
             
-            # Save causal report in Markdown format
-            with open(output_dir / "causal_search_report.md", "w", encoding="utf-8") as f:
-                f.write(f"# Causal Analysis Report\n\n")
-                f.write(f"**Query:** {query}\n\n")
-                f.write(f"**Generated:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                f.write(causal_report)
+            # Create outputs directory
+            outputs_dir = Path("data/outputs") / output_folder
+            outputs_dir.mkdir(parents=True, exist_ok=True)
             
-            logger.info("Saved outputs to data/outputs/")
+            # Generate query ID for file naming
+            query_id = self._generate_query_id(query)
+            
+            # Save network data if enabled
+            if save_network_data:
+                network_data_file = outputs_dir / f"causal_search_network_data_{query_id}.json"
+                with open(network_data_file, 'w', encoding='utf-8') as f:
+                    f.write(network_data)
+                logger.info(f"Saved network data to {network_data_file}")
+            
+            # Save causal report if enabled
+            if save_causal_report:
+                causal_report_file = outputs_dir / f"causal_search_report_{query_id}.md"
+                with open(causal_report_file, 'w', encoding='utf-8') as f:
+                    f.write(f"# Causal Analysis Report\n\n")
+                    f.write(f"**Query:** {query}\n\n")
+                    f.write(f"**Generated:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                    f.write(causal_report)
+                logger.info(f"Saved causal report to {causal_report_file}")
             
         except Exception as e:
             logger.warning(f"Failed to save outputs: {e}")
+    
+    def _generate_query_id(self, query: str) -> str:
+        """Generate a unique query ID for file naming."""
+        import hashlib
+        # Create a hash of the query for consistent file naming
+        query_hash = hashlib.md5(query.encode('utf-8')).hexdigest()[:8]
+        # Also include timestamp for uniqueness
+        timestamp = int(time.time())
+        return f"{query_hash}_{timestamp}"
 
     async def _save_prompts(self):
         """Save prompts to data folder."""

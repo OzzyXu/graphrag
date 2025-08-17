@@ -329,6 +329,9 @@ class CausalSearchDefaults:
     max_context_tokens: int = 12_000 # Maximum context window size
     chat_model_id: str = DEFAULT_CHAT_MODEL_ID
     embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID
+    save_network_data: bool = False  # Whether to save extracted network data to files
+    save_causal_report: bool = False # Whether to save causal analysis report to files
+    output_folder: str = "causal_search"  # Subfolder under data/outputs/ for causal search outputs
 
 
 @dataclass
