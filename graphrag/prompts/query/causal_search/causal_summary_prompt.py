@@ -1,4 +1,9 @@
----Role---
+# Copyright (c) 2024 Microsoft Corporation.
+# Licensed under the MIT License
+
+"""Causal summary prompt for causal search."""
+
+CAUSAL_SUMMARY_PROMPT = """---Role---
 You are a helpful assistant responding to questions about data in the tables provided. You are also specializing in **causal
 reasoning and impact assessment**. Your task is to generate a structured response based on an extracted causal summary.
 ---Goal---
@@ -18,4 +23,4 @@ roles of multiple analysts in the analysis process.
 {response_type}
 ---User Query---
 {query}
-Add sections and commentary to the response as appropriate for the length and format. Style the response in markdown.
+Add sections and commentary to the response as appropriate for the length and format. Style the response in markdown."""

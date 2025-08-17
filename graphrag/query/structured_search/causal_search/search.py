@@ -74,23 +74,11 @@ class CausalSearch(BaseSearch[LocalContextBuilder]):
     def _load_causal_discovery_prompt(self) -> str:
         """Load the causal discovery prompt template."""
         try:
-            # Try multiple possible paths
-            possible_paths = [
-                Path(__file__).parent.parent.parent.parent.parent / "graphrag" / "prompts" / "query" / "causal_search" / "causal_discovery_prompt.txt",
-                Path(__file__).parent.parent.parent.parent.parent / "causal_discovery_prompt.txt",
-                Path.cwd() / "causal_discovery_prompt.txt"
-            ]
-            
-            for prompt_path in possible_paths:
-                if prompt_path.exists():
-                    content = prompt_path.read_text(encoding="utf-8")
-                    if content.strip():  # Check if file has content
-                        logger.info(f"Loaded causal discovery prompt from {prompt_path}")
-                        return content
-                    else:
-                        logger.warning(f"causal_discovery_prompt.txt exists but is empty")
-            
-            logger.warning("causal_discovery_prompt.txt not found or empty, using default")
+            from graphrag.prompts.query.causal_search import CAUSAL_DISCOVERY_PROMPT
+            logger.info("Loaded causal discovery prompt from GraphRAG prompts")
+            return CAUSAL_DISCOVERY_PROMPT
+        except ImportError:
+            logger.warning("Failed to import causal discovery prompt, using default")
             return self._get_default_causal_discovery_prompt()
         except Exception as e:
             logger.warning(f"Failed to load causal discovery prompt: {e}, using default")
@@ -99,23 +87,11 @@ class CausalSearch(BaseSearch[LocalContextBuilder]):
     def _load_causal_summary_prompt(self) -> str:
         """Load the causal summary prompt template."""
         try:
-            # Try multiple possible paths
-            possible_paths = [
-                Path(__file__).parent.parent.parent.parent.parent / "graphrag" / "prompts" / "query" / "causal_search" / "causal_summary_report.txt",
-                Path(__file__).parent.parent.parent.parent.parent / "causal_summary_report.txt",
-                Path.cwd() / "causal_summary_report.txt"
-            ]
-            
-            for prompt_path in possible_paths:
-                if prompt_path.exists():
-                    content = prompt_path.read_text(encoding="utf-8")
-                    if content.strip():  # Check if file has content
-                        logger.info(f"Loaded causal summary prompt from {prompt_path}")
-                        return content
-                    else:
-                        logger.warning(f"causal_summary_report.txt exists but is empty")
-            
-            logger.warning("causal_summary_report.txt not found or empty, using default")
+            from graphrag.prompts.query.causal_search import CAUSAL_SUMMARY_PROMPT
+            logger.info("Loaded causal summary prompt from GraphRAG prompts")
+            return CAUSAL_SUMMARY_PROMPT
+        except ImportError:
+            logger.warning("Failed to import causal summary prompt, using default")
             return self._get_default_causal_summary_prompt()
         except Exception as e:
             logger.warning(f"Failed to load causal summary prompt: {e}, using default")
