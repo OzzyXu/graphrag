@@ -80,6 +80,26 @@ class MockVectorStore(BaseVectorStore):
     def filter_by_id(self, entity_keys):
         """Mock entity filtering."""
         pass
+    
+    async def connect(self):
+        """Mock connection."""
+        pass
+    
+    async def load_documents(self, documents):
+        """Mock document loading."""
+        pass
+    
+    async def search_by_id(self, entity_keys):
+        """Mock search by ID."""
+        pass
+    
+    async def similarity_search_by_text(self, text, k=10):
+        """Mock similarity search by text."""
+        return []
+    
+    async def similarity_search_by_vector(self, vector, k=10):
+        """Mock similarity search by vector."""
+        return []
 
 
 class MockLocalContextBuilder:
@@ -96,6 +116,15 @@ class MockLocalContextBuilder:
             "text_units": [{"id": "1", "text": "Test text unit"}],
             "community_reports": [{"community_id": "1", "summary": "Test community"}]
         }
+    
+    def get_context_records(self, **kwargs):
+        """Mock context records retrieval."""
+        return {
+            "entities": [{"id": "1", "title": "Test Entity"}],
+            "relationships": [{"source": "1", "target": "2", "description": "Test Relationship"}],
+            "text_units": [{"id": "1", "text": "Test text unit"}],
+            "community_reports": [{"community_id": "1", "summary": "Test community"}]
+        }
 
 
 def test_configuration_loading():
@@ -103,8 +132,17 @@ def test_configuration_loading():
     logger.info("🧪 Testing configuration loading...")
     
     try:
-        # Try to load configuration
-        config = load_config("ragtest", "settings.yaml")
+        # Try to load configuration from current directory
+        try:
+            config = load_config(Path("ragtest").resolve(), "settings.yaml")
+        except Exception as e:
+            logger.error(f"❌ Configuration loading failed: {e}")
+            # Try alternative approach
+            try:
+                config = load_config(Path("ragtest").resolve(), Path("settings.yaml"))
+            except Exception as e2:
+                logger.error(f"❌ Alternative configuration loading also failed: {e2}")
+                return False
         
         # Check if causal_search section exists
         if not hasattr(config, 'causal_search'):
@@ -347,7 +385,7 @@ async def test_output_saving():
         return False
 
 
-def test_error_handling():
+async def test_error_handling():
     """Test error handling in causal search."""
     logger.info("🧪 Testing error handling...")
     
@@ -360,10 +398,12 @@ def test_error_handling():
                 s_parameter=3,
                 max_context_tokens=12000
             )
-            logger.error("❌ Should have failed with invalid model")
+            # Try to use the model to trigger the error
+            await causal_search._generate_causal_report("test data")
+            logger.error("❌ Should have failed when using invalid model")
             return False
-        except Exception:
-            logger.info("✅ Correctly handled invalid model")
+        except Exception as e:
+            logger.info(f"✅ Correctly handled invalid model ({type(e).__name__})")
         
         # Test 2: CausalSearchError exception
         causal_search = CausalSearch(
@@ -415,7 +455,15 @@ async def test_full_search_workflow():
             return ["node1", "node2", "node3"]
         
         async def mock_extract_graph_information(nodes, **kwargs):
-            return {"entities": ["entity1"], "relationships": ["rel1"]}
+            # Return an object with context_records and context_chunks attributes
+            class MockContextResult:
+                def __init__(self):
+                    self.context_records = {
+                        "entities": ["entity1"], 
+                        "relationships": ["rel1"]
+                    }
+                    self.context_chunks = "Mock context chunks for testing"
+            return MockContextResult()
         
         def mock_format_network_data(context):
             return json.dumps({"test": "data"})
