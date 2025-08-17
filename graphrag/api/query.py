@@ -1215,11 +1215,14 @@ async def multi_index_basic_search(
 async def causal_search(
     config: GraphRagConfig,
     entities: pd.DataFrame,
+    communities: pd.DataFrame,
     relationships: pd.DataFrame,
     text_units: pd.DataFrame,
     community_reports: pd.DataFrame,
     covariates: dict[str, pd.DataFrame],
     query: str,
+    community_level: int | None = 2,
+    response_type: str = "Multiple Paragraphs",
     callbacks: list[QueryCallbacks] | None = None,
     verbose: bool = False,
 ) -> tuple[
@@ -1232,6 +1235,7 @@ async def causal_search(
     ----------
     - config (GraphRagConfig): A graphrag configuration (from settings.yaml)
     - entities (pd.DataFrame): A DataFrame containing the final entities (from entities.parquet)
+    - communities (pd.DataFrame): A DataFrame containing the final communities (from communities.parquet)
     - relationships (pd.DataFrame): A DataFrame containing the final relationships (from relationships.parquet)
     - text_units (pd.DataFrame): A DataFrame containing the final text units (from text_units.parquet)
     - community_reports (pd.DataFrame): A DataFrame containing the final community reports (from community_reports.parquet)
@@ -1252,10 +1256,10 @@ async def causal_search(
     context_data = {}
 
     # Convert DataFrames to lists of objects
-    entities_list = read_indexer_entities(entities)
+    entities_list = read_indexer_entities(entities, communities, community_level)
     relationships_list = read_indexer_relationships(relationships)
     text_units_list = read_indexer_text_units(text_units)
-    community_reports_list = read_indexer_reports(community_reports)
+    community_reports_list = read_indexer_reports(community_reports, communities, community_level)
     covariates_dict = {}
     for covariate_name, covariate_df in covariates.items():
         covariates_dict[covariate_name] = read_indexer_covariates(covariate_df)
@@ -1289,23 +1293,30 @@ async def causal_search(
     )
 
     logger.debug("Executing causal search query: %s", query)
-    response, context_records = await search_engine.search(query=query)
+    result = await search_engine.search(query=query)
     
-    # Update context data with the response
-    context_data = update_context_data(context_records, context_data)
+    # Convert context_data DataFrames to dictionaries for API compatibility
+    if result.context_data:
+        for key, df in result.context_data.items():
+            if hasattr(df, 'to_dict'):  # Check if it's a DataFrame
+                context_data[key] = df.to_dict('records')
+            else:
+                context_data[key] = df
     
-    return response, context_data
+    return result.response, context_data
 
 
 @validate_call(config={"arbitrary_types_allowed": True})
 def causal_search_streaming(
     config: GraphRagConfig,
     entities: pd.DataFrame,
+    communities: pd.DataFrame,
     relationships: pd.DataFrame,
     text_units: pd.DataFrame,
     community_reports: pd.DataFrame,
     covariates: dict[str, pd.DataFrame],
     query: str,
+    community_level: int | None = 2,
     response_type: str = "Multiple Paragraphs",
     callbacks: list[QueryCallbacks] | None = None,
     verbose: bool = False,
@@ -1316,11 +1327,13 @@ def causal_search_streaming(
     ----------
     - config (GraphRagConfig): A graphrag configuration (from settings.yaml)
     - entities (pd.DataFrame): A DataFrame containing the final entities (from entities.parquet)
+    - communities (pd.DataFrame): A DataFrame containing the final communities (from communities.parquet)
     - relationships (pd.DataFrame): A DataFrame containing the final relationships (from relationships.parquet)
     - text_units (pd.DataFrame): A DataFrame containing the final text units (from text_units.parquet)
     - community_reports (pd.DataFrame): A DataFrame containing the final community reports (from community_reports.parquet)
     - covariates (dict[str, pd.DataFrame]): A dictionary containing the final covariates (from covariates.parquet)
     - query (str): The user query to search for.
+    - community_level (int | None): The community level to search at.
     - callbacks (list[QueryCallbacks] | None): A list of callbacks to register.
     - verbose (bool): Whether to enable verbose logging.
 
@@ -1339,10 +1352,10 @@ def causal_search_streaming(
     logger.debug(msg)
 
     # Convert DataFrames to lists of objects
-    entities_list = read_indexer_entities(entities)
+    entities_list = read_indexer_entities(entities, communities, community_level)
     relationships_list = read_indexer_relationships(relationships)
     text_units_list = read_indexer_text_units(text_units)
-    community_reports_list = read_indexer_reports(community_reports)
+    community_reports_list = read_indexer_reports(community_reports, communities, community_level)
     covariates_dict = {}
     for covariate_name, covariate_df in covariates.items():
         covariates_dict[covariate_name] = read_indexer_covariates(covariate_df)
@@ -1376,13 +1389,16 @@ def causal_search_streaming(
 async def multi_index_causal_search(
     config: GraphRagConfig,
     entities_list: list[pd.DataFrame],
+    communities_list: list[pd.DataFrame],
     relationships_list: list[pd.DataFrame],
     text_units_list: list[pd.DataFrame],
     community_reports_list: list[pd.DataFrame],
     covariates_list: list[dict[str, pd.DataFrame]],
     index_names: list[str],
-    streaming: bool,
     query: str,
+    community_level: int | None = 2,
+    response_type: str = "Multiple Paragraphs",
+    streaming: bool = False,
     callbacks: list[QueryCallbacks] | None = None,
     verbose: bool = False,
 ) -> tuple[
@@ -1434,6 +1450,7 @@ async def multi_index_causal_search(
     }
 
     entities_dfs = []
+    communities_dfs = []
     relationships_dfs = []
     text_units_dfs = []
     community_reports_dfs = []
@@ -1452,6 +1469,14 @@ async def multi_index_causal_search(
         )
         max_vals["entities"] += entities_df.shape[0]
         entities_dfs.append(entities_df)
+
+        # Prepare communities
+        communities_df = communities_list[idx]
+        communities_df["community"] = communities_df["community"].apply(
+            lambda x, index_name=index_name: [i + f"-{index_name}" for i in x]
+        )
+        max_vals["communities"] = int(communities_df["community"].max())
+        communities_dfs.append(communities_df)
 
         # Prepare relationships
         relationships_df = relationships_list[idx]
@@ -1510,6 +1535,7 @@ async def multi_index_causal_search(
 
     # Merge the dataframes
     entities_combined = pd.concat(entities_dfs, axis=0, ignore_index=True, sort=False)
+    communities_combined = pd.concat(communities_dfs, axis=0, ignore_index=True, sort=False)
     relationships_combined = pd.concat(relationships_dfs, axis=0, ignore_index=True, sort=False)
     text_units_combined = pd.concat(text_units_dfs, axis=0, ignore_index=True, sort=False)
     community_reports_combined = pd.concat(community_reports_dfs, axis=0, ignore_index=True, sort=False)
@@ -1524,10 +1550,13 @@ async def multi_index_causal_search(
     return await causal_search(
         config,
         entities=entities_combined,
+        communities=communities_combined,
         relationships=relationships_combined,
         text_units=text_units_combined,
         community_reports=community_reports_combined,
         covariates=covariates_combined,
         query=query,
+        community_level=community_level,
+        response_type=response_type,
         callbacks=callbacks,
     )

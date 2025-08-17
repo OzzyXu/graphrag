@@ -67,20 +67,29 @@ The notebook includes several demo queries:
 
 ## Output Files
 
-The causal search automatically generates:
-- **Network Data**: `data/outputs/causal_search_network_data.json`
-- **Causal Report**: `data/outputs/causal_search_report.md`
-- **Used Prompts**: `data/prompts/causal_discovery_prompt.txt` and `causal_summary_prompt.txt`
+The causal search automatically generates files with unique identifiers:
+- **Network Data**: `data/outputs/causal_search/causal_search_network_data_<query_id>.json`
+- **Causal Report**: `data/outputs/causal_search/causal_search_report_<query_id>.md`
+- **Prompts**: Stored as Python constants in `graphrag/prompts/query/`
+
+The `<query_id>` is a unique identifier (e.g., `a70cc37d_1755454480`) combining:
+- **Query hash** (8 chars): Identifies the specific query content
+- **Timestamp** (10 chars): When the query was processed
+
+This ensures each query creates unique output files while providing traceability.
 
 ## Configuration Parameters
 
-Key parameters you can adjust:
+Key parameters you can adjust in `settings.yaml`:
 - **`s_parameter`**: Additional nodes beyond local search (default: 3)
 - **`top_k_mapped_entities`**: Number of entities to retrieve (default: 10)
 - **`top_k_relationships`**: Number of relationships per entity (default: 10)
 - **`text_unit_prop`**: Proportion for text units (default: 0.5)
 - **`community_prop`**: Proportion for community reports (default: 0.25)
 - **`max_context_tokens`**: Maximum context window (default: 12000)
+- **`save_network_data`**: Enable network data output (default: true)
+- **`save_causal_report`**: Enable causal report output (default: true)
+- **`output_folder`**: Output directory name (default: "causal_search")
 
 ## Troubleshooting
 

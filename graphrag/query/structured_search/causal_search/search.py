@@ -157,53 +157,57 @@ Add sections and commentary to the response as appropriate for the length and fo
         search_prompt = ""
         llm_calls, prompt_tokens, output_tokens = {}, {}, {}
         
+        logger.info(f"🚀 Starting causal search for query: '{query}'")
+        logger.info(f"📊 Parameters: s_parameter={self.s_parameter}, max_context_tokens={self.max_context_tokens}")
+        
         try:
-            # Step 1: Extract extended nodes (k + s)
+            # Step 1: Extract extended nodes (k + s) * oversample_scaler
             local_search_top_k = kwargs.get('top_k_mapped_entities', 10)
+            logger.info(f"🔍 Step 1: Extracting extended nodes with k={local_search_top_k}, s={self.s_parameter}")
+            
             extended_nodes = await self._extract_extended_nodes(
                 query, local_search_top_k, **kwargs
             )
+            logger.info(f"✅ Step 1 complete: Found {len(extended_nodes)} extended nodes")
             
             # Step 2: Extract graph information using local search components
+            logger.info(f"🔍 Step 2: Extracting graph information for {len(extended_nodes)} nodes")
             graph_context = await self._extract_graph_information(
                 extended_nodes, **kwargs
             )
+            logger.info(f"✅ Step 2 complete: Graph context extracted")
             
             # Step 3: Format network data for causal discovery prompt
+            logger.info(f"🔍 Step 3: Formatting network data for causal discovery prompt")
             network_data = self._format_network_data_for_causal_prompt(graph_context)
+            logger.info(f"✅ Step 3 complete: Network data formatted ({len(network_data)} characters)")
             
             # Step 4: Generate causal report (Stage 1)
+            logger.info(f"🔍 Step 4: Generating causal report using LLM")
             causal_report = await self._generate_causal_report(network_data)
+            logger.info(f"✅ Step 4 complete: Causal report generated ({len(causal_report)} characters)")
             
             # Step 5: Generate final response (Stage 2)
+            logger.info(f"🔍 Step 5: Generating final response using LLM")
             final_response = await self._generate_final_response(causal_report, query)
+            logger.info(f"✅ Step 5 complete: Final response generated ({len(final_response)} characters)")
             
-            # Step 6: Save outputs to data folder
+            # Save outputs if configured
+            logger.info(f"🔍 Step 6: Saving outputs if configured")
             await self._save_outputs(network_data, causal_report, query)
+            logger.info(f"✅ Step 6 complete: Outputs saved")
             
-            # Step 7: Save prompts to data folder
-            await self._save_prompts()
-            
-            llm_calls["causal_discovery"] = 1
-            llm_calls["response_generation"] = 1
-            prompt_tokens["causal_discovery"] = num_tokens(
-                self.causal_discovery_prompt.format(graph_data=network_data), 
-                self.token_encoder
-            )
-            prompt_tokens["response_generation"] = num_tokens(
-                self.causal_summary_prompt.format(
-                    causal_summary=causal_report,
-                    query=query,
-                    response_type=self.response_type
-                ), 
-                self.token_encoder
-            )
+            # Calculate token usage
+            prompt_tokens["causal_discovery"] = num_tokens(network_data, self.token_encoder)
+            prompt_tokens["response_generation"] = num_tokens(causal_report, self.token_encoder)
             output_tokens["causal_discovery"] = num_tokens(causal_report, self.token_encoder)
             output_tokens["response_generation"] = num_tokens(final_response, self.token_encoder)
 
             for callback in self.callbacks:
                 callback.on_context(graph_context.context_records)
 
+            logger.info(f"🎉 Causal search completed successfully in {time.time() - start_time:.2f}s")
+            
             return SearchResult(
                 response=final_response,
                 context_data=graph_context.context_records,
@@ -218,7 +222,9 @@ Add sections and commentary to the response as appropriate for the length and fo
             )
 
         except Exception as e:
-            logger.error(f"Causal search failed: {e}")
+            logger.error(f"❌ Causal search failed: {e}")
+            import traceback
+            logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
             raise CausalSearchError(f"Causal search method failed: {e}")
 
     async def stream_search(
@@ -241,7 +247,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         local_search_top_k: int,
         **kwargs
     ) -> list:
-        """Extract k+s nodes where k = local_search_top_k, s = self.s_parameter."""
+        """Extract (k+s) * oversample_scaler nodes where k = local_search_top_k, s = self.s_parameter."""
         try:
             # Get the normal local search nodes (k nodes)
             local_nodes = await self._get_local_search_nodes(query, local_search_top_k, **kwargs)
@@ -267,12 +273,18 @@ Add sections and commentary to the response as appropriate for the length and fo
     ) -> list:
         """Get the normal local search nodes using oversample_scaler."""
         try:
+            # Calculate total nodes needed: (k + s) * oversample_scaler
+            s_parameter = getattr(self, 's_parameter', 3)
+            total_nodes_needed = (top_k + s_parameter) * 2  # oversample_scaler = 2
+            
             # Use the context builder to get local search nodes
             # This mimics the local search entity extraction process
+            # Create a copy of params and override top_k_mapped_entities
+            params = dict(self.context_builder_params)
+            params['top_k_mapped_entities'] = total_nodes_needed  # Request (k + s) * oversample_scaler nodes
             context_result = self.context_builder.build_context(
                 query=query,
-                top_k_mapped_entities=top_k,
-                **self.context_builder_params
+                **params
             )
             
             # Extract entity IDs from the context
@@ -290,10 +302,12 @@ Add sections and commentary to the response as appropriate for the length and fo
                         entity_ids = entities.index.tolist() if not entities.empty else []
                     
                     logger.info(f"Extracted {len(entity_ids)} local search nodes")
-                    return entity_ids[:top_k]  # Ensure we only return top_k nodes
+                    return entity_ids[:top_k]  # Return only the top k nodes for local search
             
             # If no entities found in context, try to extract from the context builder directly
-            if hasattr(self.context_builder, 'entities') and self.context_builder.entities:
+            # Cast to LocalSearchMixedContext to access the attributes
+            from graphrag.query.structured_search.local_search.mixed_context import LocalSearchMixedContext
+            if isinstance(self.context_builder, LocalSearchMixedContext):
                 # Get entities directly from the context builder
                 all_entity_ids = list(self.context_builder.entities.keys())
                 logger.info(f"Found {len(all_entity_ids)} entities in context builder")
@@ -329,6 +343,12 @@ Add sections and commentary to the response as appropriate for the length and fo
             
             if s_parameter <= 0:
                 logger.info("s_parameter is 0 or negative, no additional nodes needed")
+                return []
+            
+            # Cast to LocalSearchMixedContext to access the attributes
+            from graphrag.query.structured_search.local_search.mixed_context import LocalSearchMixedContext
+            if not isinstance(self.context_builder, LocalSearchMixedContext):
+                logger.warning("Context builder is not LocalSearchMixedContext, cannot extract additional nodes")
                 return []
             
             # Use causal analysis heuristics to find additional nodes
@@ -368,11 +388,13 @@ Add sections and commentary to the response as appropriate for the length and fo
                         break
                     
                     # Look for entity mentions in community descriptions
-                    if hasattr(community, 'description') and community.description:
+                    # Use getattr to safely access attributes that may not exist
+                    community_desc = getattr(community, 'description', None)
+                    if community_desc:
                         # Simple entity extraction from description
                         # This could be enhanced with more sophisticated NLP
                         for entity_name in self.context_builder.entities.keys():
-                            if entity_name in community.description and entity_name not in additional_nodes:
+                            if entity_name in community_desc and entity_name not in additional_nodes:
                                 additional_nodes.append(entity_name)
                                 if len(additional_nodes) >= s_parameter:
                                     break
@@ -520,7 +542,10 @@ Add sections and commentary to the response as appropriate for the length and fo
             )
             
             # Extract content from response
-            response_content = response.content if hasattr(response, 'content') else str(response)
+            if hasattr(response, 'content') and response.content:
+                response_content = response.content
+            else:
+                response_content = str(response)
             logger.info(f"Generated causal report of length {len(response_content)}")
             return response_content
             
@@ -571,8 +596,9 @@ Add sections and commentary to the response as appropriate for the length and fo
                 logger.info("Output saving disabled in configuration")
                 return
             
-            # Create outputs directory
-            outputs_dir = Path("data/outputs") / output_folder
+            # Create outputs directory using the configured output base directory
+            output_base_dir = self.context_builder_params.get('output_base_dir', 'output')
+            outputs_dir = Path(output_base_dir) / output_folder
             outputs_dir.mkdir(parents=True, exist_ok=True)
             
             # Generate query ID for file naming

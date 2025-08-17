@@ -543,6 +543,7 @@ def run_causal_search(
         config=config,
         output_list=[
             "entities",
+            "communities",
             "relationships",
             "text_units",
             "community_reports",
@@ -553,10 +554,11 @@ def run_causal_search(
     # Call the Multi-Index Causal Search API
     if dataframe_dict["multi-index"]:
         final_entities_list = dataframe_dict["entities"]
+        final_communities_list = dataframe_dict["communities"]
         final_relationships_list = dataframe_dict["relationships"]
         final_text_units_list = dataframe_dict["text_units"]
         final_community_reports_list = dataframe_dict["community_reports"]
-        final_covariates_list = dataframe_dict.get("covariates", [])
+        final_covariates_list = dataframe_dict.get("covariates") or []
         index_names = dataframe_dict["index_names"]
 
         logger.info(
@@ -567,6 +569,7 @@ def run_causal_search(
             api.multi_index_causal_search(
                 config=config,
                 entities_list=final_entities_list,
+                communities_list=final_communities_list,
                 relationships_list=final_relationships_list,
                 text_units_list=final_text_units_list,
                 community_reports_list=final_community_reports_list,
@@ -587,10 +590,11 @@ def run_causal_search(
 
     # Otherwise, call the Single-Index Causal Search API
     final_entities: pd.DataFrame = dataframe_dict["entities"]
+    final_communities: pd.DataFrame = dataframe_dict["communities"]
     final_relationships: pd.DataFrame = dataframe_dict["relationships"]
     final_text_units: pd.DataFrame = dataframe_dict["text_units"]
     final_community_reports: pd.DataFrame = dataframe_dict["community_reports"]
-    final_covariates = dataframe_dict.get("covariates", {})
+    final_covariates = dataframe_dict.get("covariates") or {}
 
     if streaming:
         async def run_streaming_search():
@@ -607,6 +611,7 @@ def run_causal_search(
             async for stream_chunk in api.causal_search_streaming(
                 config=config,
                 entities=final_entities,
+                communities=final_communities,
                 relationships=final_relationships,
                 text_units=final_text_units,
                 community_reports=final_community_reports,
@@ -628,6 +633,7 @@ def run_causal_search(
         api.causal_search(
             config=config,
             entities=final_entities,
+            communities=final_communities,
             relationships=final_relationships,
             text_units=final_text_units,
             community_reports=final_community_reports,

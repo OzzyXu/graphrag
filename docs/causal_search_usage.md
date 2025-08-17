@@ -30,6 +30,10 @@ causal_search:
   text_unit_prop: 0.5        # Proportion of context for text units
   community_prop: 0.25       # Proportion of context for community reports
   max_context_tokens: 12000  # Maximum context window size
+  # Output control parameters
+  save_network_data: true   # Whether to save extracted network data to files
+  save_causal_report: true  # Whether to save causal analysis report to files
+  output_folder: "causal_search"  # Subfolder under data/outputs/ for causal search outputs
 ```
 
 ### Parameter Descriptions
@@ -40,6 +44,9 @@ causal_search:
 - **`text_unit_prop`**: Proportion of context window dedicated to text units (0.0 to 1.0)
 - **`community_prop`**: Proportion of context window dedicated to community reports (0.0 to 1.0)
 - **`max_context_tokens`**: Maximum token limit for the context window
+- **`save_network_data`**: Whether to save extracted network data as JSON files (true/false)
+- **`save_causal_report`**: Whether to save causal analysis reports as Markdown files (true/false)
+- **`output_folder`**: Subfolder name under `data/outputs/` for storing causal search outputs
 
 ## Usage Methods
 
@@ -131,16 +138,34 @@ The causal search method automatically performs two stages:
 
 ### Automatic Outputs
 
-The method automatically saves outputs to the following locations:
+The method automatically saves outputs to the configured output directory with unique filenames:
 
 ```
-data/
-├── outputs/
-│   ├── causal_search_network_data.json    # Extracted graph information in JSON format
-│   └── causal_search_report.md            # Causal analysis report in Markdown
+output/
+└── causal_search/
+    ├── causal_search_network_data_<query_id>.json    # Extracted graph information
+    └── causal_search_report_<query_id>.md           # Causal analysis report
+```
+
+Where `<query_id>` is a unique identifier (e.g., `a70cc37d_1755454480`) that ensures each query's outputs are distinct. The query ID format is:
+- **First 8 characters**: Hash of the query content (e.g., `a70cc37d`)
+- **Last 10 characters**: Unix timestamp when the query was processed (e.g., `1755454480`)
+
+This naming scheme allows you to:
+- **Track specific queries** by identifying them through the hash prefix
+- **Sort files chronologically** using the timestamp suffix
+- **Avoid filename conflicts** when running multiple queries
+
+### Prompt Storage
+
+Prompts are stored as Python constants in the GraphRAG codebase:
+
+```
+graphrag/
 └── prompts/
-    ├── causal_discovery_prompt.txt        # Prompt used for causal discovery
-    └── causal_summary_prompt.txt          # Prompt used for response generation
+    └── query/
+        ├── causal_discovery_prompt.py    # Causal discovery prompt
+        └── causal_summary_prompt.py      # Response generation prompt
 ```
 
 ### Network Data Format

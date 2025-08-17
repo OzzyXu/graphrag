@@ -372,6 +372,7 @@ def get_causal_search_engine(
                    "save_network_data": cs_config.save_network_data,
                    "save_causal_report": cs_config.save_causal_report,
                    "output_folder": cs_config.output_folder,
+                   "output_base_dir": config.output.base_dir,  # Pass the actual output directory
                },
         response_type=response_type,
         callbacks=callbacks,

@@ -490,4 +490,5 @@ class LocalSearchMixedContext(LocalContextBuilder):
         else:
             for key in final_context_data:
                 final_context_data[key]["in_context"] = True
+        
         return (final_context_text, final_context_data)

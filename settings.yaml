@@ -117,28 +117,23 @@ community_reports:
   max_length: 2000
   max_input_length: 8000
 
-### Causal Analysis Configuration ###
-## Settings for running causal analysis on the knowledge graph
-## This workflow analyzes causal relationships between entities and generates reports
-## 
-## NOTE: Currently, only the core settings below are fully implemented.
-## Additional settings are provided as a framework for future enhancements.
-causal_analysis:
-  enabled: true  # Enable/disable causal analysis workflow
-  model_id: default_chat_model  # Which LLM to use for analysis
-  prompt: "prompts/causal_analysis.txt"  # Custom prompt file (optional)
-  max_analysis_length: 25000  # Maximum length of generated report (prevents truncation)
-  # Use "full" for unlimited length, or specify a number (e.g., 8000, 12000, 20000)
-  # Note: "full" will use the LLM's maximum token limit, which may vary by model
-  
-  # Analysis quality settings (framework for future implementation)
-  min_confidence_threshold: 0.5  # Minimum confidence for causal relationships
-  max_nodes_for_analysis: 100  # Maximum nodes to include in analysis
-  
-  # Output content settings (framework for future implementation)
-  include_confidence_scores: true  # Include confidence scores in results
-  include_key_entities: true  # Include key entity identification
-  export_formats: ["graphml", "json", "parquet"]  # Output file formats
+### Causal Search Configuration ###
+## Settings for running causal search on the knowledge graph
+## This search method extracts extended graph information and generates causal analysis
+causal_search:
+  chat_model_id: default_chat_model
+  embedding_model_id: default_embedding_model
+  # Retrieval breadth control parameters
+  s_parameter: 3  # Additional nodes beyond local search for causal analysis
+  top_k_mapped_entities: 10  # Number of entities to retrieve from embedding store
+  top_k_relationships: 10    # Number of relationships to retrieve per entity
+  text_unit_prop: 0.5        # Proportion of context for text units
+  community_prop: 0.25       # Proportion of context for community reports
+  max_context_tokens: 12000  # Maximum context window size
+  # Output control parameters
+  save_network_data: true   # Whether to save extracted network data to files
+  save_causal_report: true  # Whether to save causal analysis report to files
+  output_folder: "causal_search"  # Subfolder under data/outputs/ for causal search outputs
 
 embed_graph:
   enabled: true # if true, will generate node2vec embeddings for nodes
@@ -158,6 +153,12 @@ local_search:
   chat_model_id: default_chat_model
   embedding_model_id: default_embedding_model
   prompt: "prompts/local_search_system_prompt.txt"
+  # Retrieval breadth control parameters
+  top_k_mapped_entities: 10  # Number of entities to retrieve from embedding store
+  top_k_relationships: 10    # Number of relationships to retrieve per entity
+  text_unit_prop: 0.5        # Proportion of context for text units
+  community_prop: 0.25       # Proportion of context for community reports
+  max_context_tokens: 12000  # Maximum context window size
 
 global_search:
   chat_model_id: default_chat_model
@@ -170,6 +171,13 @@ drift_search:
   embedding_model_id: default_embedding_model
   prompt: "prompts/drift_search_system_prompt.txt"
   reduce_prompt: "prompts/drift_search_reduce_prompt.txt"
+  # Retrieval breadth control parameters for drift search
+  local_search_top_k_mapped_entities: 10  # Number of entities to retrieve in local search phase
+  local_search_top_k_relationships: 10    # Number of relationships to retrieve in local search phase
+  drift_k_followups: 20                  # Number of top global results to retrieve
+  local_search_text_unit_prop: 0.9       # Proportion of local search context for text units
+  local_search_community_prop: 0.1       # Proportion of local search context for community reports
+  local_search_max_data_tokens: 12000    # Maximum context size for local search phase
 
 basic_search:
   chat_model_id: default_chat_model
