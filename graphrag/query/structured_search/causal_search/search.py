@@ -162,7 +162,8 @@ Add sections and commentary to the response as appropriate for the length and fo
         
         try:
             # Step 1: Extract extended nodes (k + s) * oversample_scaler
-            local_search_top_k = kwargs.get('top_k_mapped_entities', 10)
+            # Get top_k from configuration, not kwargs
+            local_search_top_k = self.context_builder_params.get('top_k_mapped_entities', 10)
             logger.info(f"🔍 Step 1: Extracting extended nodes with k={local_search_top_k}, s={self.s_parameter}")
             
             extended_nodes = await self._extract_extended_nodes(
