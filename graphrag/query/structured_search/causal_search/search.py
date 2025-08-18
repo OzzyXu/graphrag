@@ -795,7 +795,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         
         # Sort by rank if available (highest first), otherwise by order
         if 'rank' in entities_df.columns:
-            sorted_entities = entities_df.sort_values('rank', ascending=False, na_last=True)
+            sorted_entities = entities_df.sort_values('rank', ascending=False, na_position='last')
         else:
             sorted_entities = entities_df
             
@@ -842,9 +842,9 @@ Add sections and commentary to the response as appropriate for the length and fo
         
         # Sort by weight/rank if available (highest first), otherwise by order
         if 'weight' in relationships_df.columns:
-            sorted_relationships = relationships_df.sort_values('weight', ascending=False, na_last=True)
+            sorted_relationships = relationships_df.sort_values('weight', ascending=False, na_position='last')
         elif 'rank' in relationships_df.columns:
-            sorted_relationships = relationships_df.sort_values('rank', ascending=False, na_last=True)
+            sorted_relationships = relationships_df.sort_values('rank', ascending=False, na_position='last')
         else:
             sorted_relationships = relationships_df
             
@@ -889,7 +889,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         
         # Sort by token count if available (shorter first to fit more), otherwise by order
         if 'n_tokens' in text_units_df.columns:
-            sorted_text_units = text_units_df.sort_values('n_tokens', ascending=True, na_last=True)
+            sorted_text_units = text_units_df.sort_values('n_tokens', ascending=True, na_position='last')
         else:
             sorted_text_units = text_units_df
             
