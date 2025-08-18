@@ -563,27 +563,59 @@ Add sections and commentary to the response as appropriate for the length and fo
                 model_parameters=self.model_params
             )
             
-            # Extract content from response
-            if hasattr(response, 'content') and response.content:
+            # Extract content from response - use the correct GraphRAG pattern
+            response_content = None
+            
+            # Method 1: Standard GraphRAG pattern - response.output.content
+            if hasattr(response, 'output') and hasattr(response.output, 'content'):
+                response_content = response.output.content or ""
+                logger.debug(f"Extracted content from response.output.content")
+            
+            # Method 2: Direct content attribute (fallback)
+            elif hasattr(response, 'content') and getattr(response, 'content', None):
                 response_content = response.content
                 logger.debug(f"Extracted content successfully from response.content")
+            
+            # Method 3: If response itself is a BaseModelOutput-like object, try various attributes
+            elif hasattr(response, 'parsed_response') and response.parsed_response:
+                response_content = response.parsed_response
+                logger.debug(f"Extracted content from response.parsed_response")
+            
+            # Method 4: Try to extract from string representation with improved regex
             else:
-                logger.warning(f"Response object has no content attribute or content is empty. Response type: {type(response)}")
-                # Try to extract from string representation if it's BaseModelOutput format
+                logger.warning(f"Response object has no recognized content attribute. Response type: {type(response)}")
                 response_str = str(response)
-                if 'BaseModelOutput(content=' in response_str:
-                    # Extract content from the string representation
-                    import re
-                    # Handle multi-line content properly
-                    match = re.search(r"content='(.*?)', full_response=", response_str, re.DOTALL)
+                
+                # Look for content in BaseModelOutput format with better patterns
+                import re
+                patterns = [
+                    r'BaseModelOutput\(content="(.*?)"(?:,|\))',  # Pattern 1: content="..."
+                    r"BaseModelOutput\(content='(.*?)'(?:,|\))",  # Pattern 2: content='...'
+                    r'content="(.*?)"',  # Pattern 3: Simple content="..."
+                    r"content='(.*?)'",  # Pattern 4: Simple content='...'
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, response_str, re.DOTALL)
                     if match:
-                        response_content = match.group(1).replace('\\n', '\n').replace("\\'", "'").replace('\\"', '"')
-                        logger.debug(f"Extracted content from string representation")
-                    else:
-                        response_content = response_str
-                        logger.warning(f"Could not extract content from BaseModelOutput string")
-                else:
+                        response_content = match.group(1)
+                        # Unescape common escape sequences
+                        response_content = response_content.replace('\\n', '\n')
+                        response_content = response_content.replace("\\'", "'")
+                        response_content = response_content.replace('\\"', '"')
+                        response_content = response_content.replace('\\\\', '\\')
+                        logger.debug(f"Extracted content using pattern: {pattern}")
+                        break
+                
+                # If no pattern matched, use the full string as fallback
+                if response_content is None:
                     response_content = response_str
+                    logger.warning(f"Could not extract content from response, using full string")
+            
+            # Ensure we have some content
+            if not response_content:
+                response_content = "Failed to generate causal analysis report - no content received from LLM"
+                logger.error("No content extracted from LLM response")
             
             logger.info(f"Generated causal report of length {len(response_content)}")
             return response_content
@@ -610,27 +642,59 @@ Add sections and commentary to the response as appropriate for the length and fo
                 model_parameters=self.model_params
             )
             
-            # Extract content from response
-            if hasattr(response, 'content') and response.content:
+            # Extract content from response - use the correct GraphRAG pattern
+            response_content = None
+            
+            # Method 1: Standard GraphRAG pattern - response.output.content
+            if hasattr(response, 'output') and hasattr(response.output, 'content'):
+                response_content = response.output.content or ""
+                logger.debug(f"Extracted final response content from response.output.content")
+            
+            # Method 2: Direct content attribute (fallback)
+            elif hasattr(response, 'content') and getattr(response, 'content', None):
                 response_content = response.content
                 logger.debug(f"Extracted final response content successfully from response.content")
+            
+            # Method 3: If response itself is a BaseModelOutput-like object, try various attributes
+            elif hasattr(response, 'parsed_response') and response.parsed_response:
+                response_content = response.parsed_response
+                logger.debug(f"Extracted final response content from response.parsed_response")
+            
+            # Method 4: Try to extract from string representation with improved regex
             else:
-                logger.warning(f"Final response object has no content attribute or content is empty. Response type: {type(response)}")
-                # Try to extract from string representation if it's BaseModelOutput format
+                logger.warning(f"Final response object has no recognized content attribute. Response type: {type(response)}")
                 response_str = str(response)
-                if 'BaseModelOutput(content=' in response_str:
-                    # Extract content from the string representation
-                    import re
-                    # Handle multi-line content properly
-                    match = re.search(r"content='(.*?)', full_response=", response_str, re.DOTALL)
+                
+                # Look for content in BaseModelOutput format with better patterns
+                import re
+                patterns = [
+                    r'BaseModelOutput\(content="(.*?)"(?:,|\))',  # Pattern 1: content="..."
+                    r"BaseModelOutput\(content='(.*?)'(?:,|\))",  # Pattern 2: content='...'
+                    r'content="(.*?)"',  # Pattern 3: Simple content="..."
+                    r"content='(.*?)'",  # Pattern 4: Simple content='...'
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, response_str, re.DOTALL)
                     if match:
-                        response_content = match.group(1).replace('\\n', '\n').replace("\\'", "'").replace('\\"', '"')
-                        logger.debug(f"Extracted final response content from string representation")
-                    else:
-                        response_content = response_str
-                        logger.warning(f"Could not extract final response content from BaseModelOutput string")
-                else:
+                        response_content = match.group(1)
+                        # Unescape common escape sequences
+                        response_content = response_content.replace('\\n', '\n')
+                        response_content = response_content.replace("\\'", "'")
+                        response_content = response_content.replace('\\"', '"')
+                        response_content = response_content.replace('\\\\', '\\')
+                        logger.debug(f"Extracted final response content using pattern: {pattern}")
+                        break
+                
+                # If no pattern matched, use the full string as fallback
+                if response_content is None:
                     response_content = response_str
+                    logger.warning(f"Could not extract final response content from response, using full string")
+            
+            # Ensure we have some content
+            if not response_content:
+                response_content = "Failed to generate final response - no content received from LLM"
+                logger.error("No content extracted from final response LLM call")
             
             logger.info(f"Generated final response of length {len(response_content)}")
             return response_content
