@@ -445,8 +445,15 @@ Add sections and commentary to the response as appropriate for the length and fo
             raise CausalSearchError(f"Graph information extraction failed: {e}")
 
     def _format_network_data_for_causal_prompt(self, graph_context: Any) -> str:
-        """Format extracted graph information for causal discovery prompt."""
+        """Format extracted graph information for causal discovery prompt with context truncation."""
         try:
+            from graphrag.query.llm.text_utils import num_tokens
+            # Set token limits for network data components (similar to local search proportions)
+            max_total_tokens = 8000  # Conservative limit for network data portion
+            entity_token_limit = int(max_total_tokens * 0.4)  # 40% for entities
+            relationship_token_limit = int(max_total_tokens * 0.4)  # 40% for relationships  
+            text_unit_token_limit = int(max_total_tokens * 0.2)  # 20% for text units
+            
             # Convert context data to structured format
             network_data = {
                 "entities": [],
@@ -455,26 +462,32 @@ Add sections and commentary to the response as appropriate for the length and fo
                 "community_reports": []
             }
             
-            # Extract entities from context
+            # Extract entities from context with selective fields and token limits
             if hasattr(graph_context, 'context_records') and graph_context.context_records:
                 logger.debug(f"Context records keys: {list(graph_context.context_records.keys())}")
                 
                 entities_df = graph_context.context_records.get('entities', pd.DataFrame())
                 if not entities_df.empty:
-                    network_data["entities"] = entities_df.to_dict('records')
-                    logger.debug(f"Found {len(entities_df)} entities in context records")
+                    network_data["entities"] = self._truncate_entities_for_context(
+                        entities_df, entity_token_limit
+                    )
+                    logger.debug(f"Found {len(entities_df)} entities, truncated to {len(network_data['entities'])} for context")
                 
                 relationships_df = graph_context.context_records.get('relationships', pd.DataFrame())
                 if not relationships_df.empty:
-                    network_data["relationships"] = relationships_df.to_dict('records')
-                    logger.debug(f"Found {len(relationships_df)} relationships in context records")
+                    network_data["relationships"] = self._truncate_relationships_for_context(
+                        relationships_df, relationship_token_limit
+                    )
+                    logger.debug(f"Found {len(relationships_df)} relationships, truncated to {len(network_data['relationships'])} for context")
                 else:
                     logger.debug("No relationships found in context records")
                 
                 text_units_df = graph_context.context_records.get('text_units', pd.DataFrame())
                 if not text_units_df.empty:
-                    network_data["text_units"] = text_units_df.to_dict('records')
-                    logger.debug(f"Found {len(text_units_df)} text units in context records")
+                    network_data["text_units"] = self._truncate_text_units_for_context(
+                        text_units_df, text_unit_token_limit
+                    )
+                    logger.debug(f"Found {len(text_units_df)} text units, truncated to {len(network_data['text_units'])} for context")
                 else:
                     logger.debug("No text units found in context records")
                 
@@ -489,66 +502,30 @@ Add sections and commentary to the response as appropriate for the length and fo
             # If no entities found in context records, try to get from context builder directly
             if not network_data["entities"] and hasattr(self.context_builder, 'entities'):
                 logger.debug(f"No entities in context records, trying context builder with {len(self.context_builder.entities)} entities")
-                # Extract entities directly from context builder
-                entities_list = []
-                for entity_id, entity in self.context_builder.entities.items():
-                    entity_dict = {
-                        'id': entity.id,
-                        'short_id': getattr(entity, 'short_id', None),
-                        'title': getattr(entity, 'title', ''),
-                        'type': getattr(entity, 'type', None),
-                        'description': getattr(entity, 'description', ''),
-                        'description_embedding': getattr(entity, 'description_embedding', None),
-                        'name_embedding': getattr(entity, 'name_embedding', None),
-                        'community_ids': getattr(entity, 'community_ids', None),
-                        'text_unit_ids': getattr(entity, 'text_unit_ids', None),
-                        'rank': getattr(entity, 'rank', 1),
-                        'attributes': getattr(entity, 'attributes', None),
-                    }
-                    entities_list.append(entity_dict)
+                # Extract entities directly from context builder with truncation
+                entities_list = self._truncate_entities_from_context_builder(
+                    self.context_builder.entities, entity_token_limit
+                )
                 network_data["entities"] = entities_list
-                logger.debug(f"Extracted {len(entities_list)} entities from context builder")
+                logger.debug(f"Extracted {len(entities_list)} entities from context builder (truncated)")
                 
             # Extract relationships directly from context builder (even if entities were found in context records)
             if not network_data["relationships"] and hasattr(self.context_builder, 'relationships'):
                 logger.debug(f"No relationships in context records, trying context builder with {len(self.context_builder.relationships)} relationships")
-                relationships_list = []
-                for rel_id, rel in self.context_builder.relationships.items():
-                    rel_dict = {
-                        'id': rel.id,
-                        'short_id': getattr(rel, 'short_id', None),
-                        'source': rel.source,
-                        'target': rel.target,
-                        'weight': getattr(rel, 'weight', 1.0),
-                        'description': getattr(rel, 'description', None),
-                        'description_embedding': getattr(rel, 'description_embedding', None),
-                        'text_unit_ids': getattr(rel, 'text_unit_ids', None),
-                        'rank': getattr(rel, 'rank', 1),
-                        'attributes': getattr(rel, 'attributes', None),
-                    }
-                    relationships_list.append(rel_dict)
+                relationships_list = self._truncate_relationships_from_context_builder(
+                    self.context_builder.relationships, relationship_token_limit
+                )
                 network_data["relationships"] = relationships_list
-                logger.debug(f"Extracted {len(relationships_list)} relationships from context builder")
+                logger.debug(f"Extracted {len(relationships_list)} relationships from context builder (truncated)")
                 
                 # Extract text units directly from context builder (even if other data was found in context records)
                 if not network_data["text_units"] and hasattr(self.context_builder, 'text_units'):
                     logger.debug(f"No text units in context records, trying context builder with {len(self.context_builder.text_units)} text units")
-                    text_units_list = []
-                    for unit_id, unit in self.context_builder.text_units.items():
-                        unit_dict = {
-                            'id': unit.id,
-                            'short_id': getattr(unit, 'short_id', None),
-                            'text': getattr(unit, 'text', ''),
-                            'entity_ids': getattr(unit, 'entity_ids', None),
-                            'relationship_ids': getattr(unit, 'relationship_ids', None),
-                            'covariate_ids': getattr(unit, 'covariate_ids', None),
-                            'n_tokens': getattr(unit, 'n_tokens', None),
-                            'document_ids': getattr(unit, 'document_ids', None),
-                            'attributes': getattr(unit, 'attributes', None),
-                        }
-                        text_units_list.append(unit_dict)
+                    text_units_list = self._truncate_text_units_from_context_builder(
+                        self.context_builder.text_units, text_unit_token_limit
+                    )
                     network_data["text_units"] = text_units_list
-                    logger.debug(f"Extracted {len(text_units_list)} text units from context builder")
+                    logger.debug(f"Extracted {len(text_units_list)} text units from context builder (truncated)")
                 
                 # Extract community reports directly from context builder
                 if hasattr(self.context_builder, 'community_reports'):
@@ -734,3 +711,269 @@ Add sections and commentary to the response as appropriate for the length and fo
             
         except Exception as e:
             logger.warning(f"Failed to save prompts: {e}")
+
+    def _truncate_entities_for_context(self, entities_df: pd.DataFrame, max_tokens: int) -> list[dict]:
+        """Truncate entities to fit within token limit, using only essential fields."""
+        from graphrag.query.llm.text_utils import num_tokens
+        
+        if entities_df.empty:
+            return []
+        
+        # Essential fields only (similar to local search approach)
+        essential_fields = ['id', 'entity', 'description']
+        if 'rank' in entities_df.columns:
+            essential_fields.append('rank')
+        if 'type' in entities_df.columns:
+            essential_fields.append('type')
+            
+        entities_list = []
+        current_tokens = 0
+        
+        # Sort by rank if available (highest first), otherwise by order
+        if 'rank' in entities_df.columns:
+            sorted_entities = entities_df.sort_values('rank', ascending=False, na_last=True)
+        else:
+            sorted_entities = entities_df
+            
+        for _, entity in sorted_entities.iterrows():
+            # Create entity dict with essential fields only
+            entity_dict = {}
+            for field in essential_fields:
+                if field in entity.index:
+                    value = entity[field]
+                    # Handle NaN values
+                    if pd.isna(value):
+                        entity_dict[field] = "" if field in ['entity', 'description', 'type'] else 0
+                    else:
+                        entity_dict[field] = value
+                        
+            # Estimate tokens for this entity
+            entity_str = str(entity_dict)
+            entity_tokens = num_tokens(entity_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
+            
+            if current_tokens + entity_tokens > max_tokens:
+                break
+                
+            entities_list.append(entity_dict)
+            current_tokens += entity_tokens
+            
+        return entities_list
+    
+    def _truncate_relationships_for_context(self, relationships_df: pd.DataFrame, max_tokens: int) -> list[dict]:
+        """Truncate relationships to fit within token limit, using only essential fields."""
+        from graphrag.query.llm.text_utils import num_tokens
+        
+        if relationships_df.empty:
+            return []
+        
+        # Essential fields only (similar to local search approach)
+        essential_fields = ['id', 'source', 'target', 'description']
+        if 'weight' in relationships_df.columns:
+            essential_fields.append('weight')
+        if 'rank' in relationships_df.columns:
+            essential_fields.append('rank')
+            
+        relationships_list = []
+        current_tokens = 0
+        
+        # Sort by weight/rank if available (highest first), otherwise by order
+        if 'weight' in relationships_df.columns:
+            sorted_relationships = relationships_df.sort_values('weight', ascending=False, na_last=True)
+        elif 'rank' in relationships_df.columns:
+            sorted_relationships = relationships_df.sort_values('rank', ascending=False, na_last=True)
+        else:
+            sorted_relationships = relationships_df
+            
+        for _, rel in sorted_relationships.iterrows():
+            # Create relationship dict with essential fields only
+            rel_dict = {}
+            for field in essential_fields:
+                if field in rel.index:
+                    value = rel[field]
+                    # Handle NaN values
+                    if pd.isna(value):
+                        rel_dict[field] = "" if field in ['source', 'target', 'description'] else 0
+                    else:
+                        rel_dict[field] = value
+                        
+            # Estimate tokens for this relationship
+            rel_str = str(rel_dict)
+            rel_tokens = num_tokens(rel_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
+            
+            if current_tokens + rel_tokens > max_tokens:
+                break
+                
+            relationships_list.append(rel_dict)
+            current_tokens += rel_tokens
+            
+        return relationships_list
+    
+    def _truncate_text_units_for_context(self, text_units_df: pd.DataFrame, max_tokens: int) -> list[dict]:
+        """Truncate text units to fit within token limit, using only essential fields.""" 
+        from graphrag.query.llm.text_utils import num_tokens
+        
+        if text_units_df.empty:
+            return []
+        
+        # Essential fields only - focus on the text content and basic metadata
+        essential_fields = ['id', 'text']
+        if 'n_tokens' in text_units_df.columns:
+            essential_fields.append('n_tokens')
+            
+        text_units_list = []
+        current_tokens = 0
+        
+        # Sort by token count if available (shorter first to fit more), otherwise by order
+        if 'n_tokens' in text_units_df.columns:
+            sorted_text_units = text_units_df.sort_values('n_tokens', ascending=True, na_last=True)
+        else:
+            sorted_text_units = text_units_df
+            
+        for _, unit in sorted_text_units.iterrows():
+            # Create text unit dict with essential fields only
+            unit_dict = {}
+            for field in essential_fields:
+                if field in unit.index:
+                    value = unit[field]
+                    # Handle NaN values
+                    if pd.isna(value):
+                        unit_dict[field] = "" if field == 'text' else 0
+                    else:
+                        # Truncate text if it's too long
+                        if field == 'text' and isinstance(value, str) and len(value) > 1000:
+                            unit_dict[field] = value[:1000] + "..."
+                        else:
+                            unit_dict[field] = value
+                        
+            # Estimate tokens for this text unit
+            unit_str = str(unit_dict)
+            unit_tokens = num_tokens(unit_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
+            
+            if current_tokens + unit_tokens > max_tokens:
+                break
+                
+            text_units_list.append(unit_dict)
+            current_tokens += unit_tokens
+            
+        return text_units_list
+    
+    def _truncate_entities_from_context_builder(self, entities_dict: dict, max_tokens: int) -> list[dict]:
+        """Truncate entities from context builder to fit within token limit."""
+        from graphrag.query.llm.text_utils import num_tokens
+        
+        if not entities_dict:
+            return []
+            
+        entities_list = []
+        current_tokens = 0
+        
+        # Sort entities by rank if available (highest first)
+        sorted_entities = sorted(
+            entities_dict.values(), 
+            key=lambda x: getattr(x, 'rank', 0), 
+            reverse=True
+        )
+        
+        for entity in sorted_entities:
+            # Create entity dict with essential fields only
+            entity_dict = {
+                'id': entity.id,
+                'entity': getattr(entity, 'title', ''),
+                'description': getattr(entity, 'description', ''),
+                'rank': getattr(entity, 'rank', 1),
+                'type': getattr(entity, 'type', ''),
+            }
+            
+            # Estimate tokens for this entity
+            entity_str = str(entity_dict)
+            entity_tokens = num_tokens(entity_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
+            
+            if current_tokens + entity_tokens > max_tokens:
+                break
+                
+            entities_list.append(entity_dict)
+            current_tokens += entity_tokens
+            
+        return entities_list
+    
+    def _truncate_relationships_from_context_builder(self, relationships_dict: dict, max_tokens: int) -> list[dict]:
+        """Truncate relationships from context builder to fit within token limit."""
+        from graphrag.query.llm.text_utils import num_tokens
+        
+        if not relationships_dict:
+            return []
+            
+        relationships_list = []
+        current_tokens = 0
+        
+        # Sort relationships by weight if available (highest first)
+        sorted_relationships = sorted(
+            relationships_dict.values(), 
+            key=lambda x: getattr(x, 'weight', 0), 
+            reverse=True
+        )
+        
+        for rel in sorted_relationships:
+            # Create relationship dict with essential fields only
+            rel_dict = {
+                'id': rel.id,
+                'source': rel.source,
+                'target': rel.target,
+                'description': getattr(rel, 'description', ''),
+                'weight': getattr(rel, 'weight', 1.0),
+                'rank': getattr(rel, 'rank', 1),
+            }
+            
+            # Estimate tokens for this relationship
+            rel_str = str(rel_dict)
+            rel_tokens = num_tokens(rel_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
+            
+            if current_tokens + rel_tokens > max_tokens:
+                break
+                
+            relationships_list.append(rel_dict)
+            current_tokens += rel_tokens
+            
+        return relationships_list
+    
+    def _truncate_text_units_from_context_builder(self, text_units_dict: dict, max_tokens: int) -> list[dict]:
+        """Truncate text units from context builder to fit within token limit."""
+        from graphrag.query.llm.text_utils import num_tokens
+        
+        if not text_units_dict:
+            return []
+            
+        text_units_list = []
+        current_tokens = 0
+        
+        # Sort text units by token count if available (shorter first to fit more)
+        sorted_text_units = sorted(
+            text_units_dict.values(), 
+            key=lambda x: getattr(x, 'n_tokens', 1000), 
+            reverse=False
+        )
+        
+        for unit in sorted_text_units:
+            # Create text unit dict with essential fields only
+            text_content = getattr(unit, 'text', '')
+            # Truncate text if it's too long
+            if isinstance(text_content, str) and len(text_content) > 1000:
+                text_content = text_content[:1000] + "..."
+                
+            unit_dict = {
+                'id': unit.id,
+                'text': text_content,
+                'n_tokens': getattr(unit, 'n_tokens', 0),
+            }
+            
+            # Estimate tokens for this text unit
+            unit_str = str(unit_dict)
+            unit_tokens = num_tokens(unit_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
+            
+            if current_tokens + unit_tokens > max_tokens:
+                break
+                
+            text_units_list.append(unit_dict)
+            current_tokens += unit_tokens
+            
+        return text_units_list
