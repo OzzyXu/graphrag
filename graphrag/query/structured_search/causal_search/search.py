@@ -250,195 +250,87 @@ Add sections and commentary to the response as appropriate for the length and fo
     ) -> list:
         """Extract (k+s) * oversample_scaler nodes where k = local_search_top_k, s = self.s_parameter."""
         try:
-            # Get the normal local search nodes (k nodes)
-            local_nodes = await self._get_local_search_nodes(query, local_search_top_k, **kwargs)
-            
-            # Get additional s nodes for causal analysis
-            additional_nodes = await self._get_additional_causal_nodes(query, **kwargs)
-            
-            # Combine and deduplicate
-            all_nodes = list(set(local_nodes + additional_nodes))
-            
-            logger.info(f"Extracted {len(all_nodes)} nodes: {len(local_nodes)} local + {len(additional_nodes)} additional")
-            return all_nodes
-            
-        except Exception as e:
-            logger.error(f"Failed to extract extended nodes: {e}")
-            raise CausalSearchError(f"Node extraction failed: {e}")
-
-    async def _get_local_search_nodes(
-        self, 
-        query: str, 
-        top_k: int,
-        **kwargs
-    ) -> list:
-        """Get the normal local search nodes using oversample_scaler."""
-        try:
             # Calculate total nodes needed: (k + s) * oversample_scaler
             s_parameter = getattr(self, 's_parameter', 3)
-            total_nodes_needed = (top_k + s_parameter) * 2  # oversample_scaler = 2
+            total_nodes_needed = (local_search_top_k + s_parameter) * 2  # oversample_scaler = 2
             
-            # Use the context builder to get local search nodes
-            # This mimics the local search entity extraction process
+            logger.info(f"Requesting {total_nodes_needed} nodes: (k={local_search_top_k} + s={s_parameter}) * 2")
+            
+            # Use the context builder to get all extended nodes at once
             # Create a copy of params and override top_k_mapped_entities
             params = dict(self.context_builder_params)
-            params['top_k_mapped_entities'] = total_nodes_needed  # Request (k + s) * oversample_scaler nodes
+            params['top_k_mapped_entities'] = total_nodes_needed  # Request all nodes needed
             context_result = self.context_builder.build_context(
                 query=query,
                 **params
             )
             
             # Extract entity IDs from the context
+            extracted_nodes = []
             if hasattr(context_result, 'context_records') and context_result.context_records:
                 # Look for entities in the context records
                 entities = context_result.context_records.get('entities', pd.DataFrame())
                 if not entities.empty and len(entities) > 0:
                     # Extract entity IDs from the DataFrame
                     if 'id' in entities.columns:
-                        entity_ids = entities['id'].tolist()
+                        extracted_nodes = entities['id'].tolist()
                     elif 'entity_id' in entities.columns:
-                        entity_ids = entities['entity_id'].tolist()
+                        extracted_nodes = entities['entity_id'].tolist()
                     else:
                         # If no ID column, try to get from index or other columns
-                        entity_ids = entities.index.tolist() if not entities.empty else []
+                        extracted_nodes = entities.index.tolist() if not entities.empty else []
+            
+            # If no entities found in context records, try to extract from the context builder directly
+            if not extracted_nodes:
+                from graphrag.query.structured_search.local_search.mixed_context import LocalSearchMixedContext
+                if isinstance(self.context_builder, LocalSearchMixedContext):
+                    # Get entities directly from the context builder
+                    all_entity_ids = list(self.context_builder.entities.keys())
+                    logger.info(f"Found {len(all_entity_ids)} entities in context builder")
                     
-                    logger.info(f"Extracted {len(entity_ids)} local search nodes")
-                    return entity_ids[:top_k]  # Return only the top k nodes for local search
+                    if all_entity_ids:
+                        # Sort by rank if available and take the requested amount
+                        sorted_entities = sorted(
+                            self.context_builder.entities.values(),
+                            key=lambda x: x.rank if hasattr(x, 'rank') and x.rank else 0,
+                            reverse=True
+                        )
+                        extracted_nodes = [entity.id for entity in sorted_entities[:total_nodes_needed]]
             
-            # If no entities found in context, try to extract from the context builder directly
-            # Cast to LocalSearchMixedContext to access the attributes
-            from graphrag.query.structured_search.local_search.mixed_context import LocalSearchMixedContext
-            if isinstance(self.context_builder, LocalSearchMixedContext):
-                # Get entities directly from the context builder
-                all_entity_ids = list(self.context_builder.entities.keys())
-                logger.info(f"Found {len(all_entity_ids)} entities in context builder")
-                
-                # For now, return top entities by rank (this is a fallback)
-                if all_entity_ids:
-                    # Sort by rank if available
-                    sorted_entities = sorted(
-                        self.context_builder.entities.values(),
-                        key=lambda x: x.rank if hasattr(x, 'rank') and x.rank else 0,
-                        reverse=True
-                    )
-                    top_entity_ids = [entity.id for entity in sorted_entities[:top_k]]
-                    logger.info(f"Returning top {len(top_entity_ids)} entities by rank")
-                    return top_entity_ids
-            
-            logger.warning("No entities found in local search context")
-            return []
+            logger.info(f"✅ Extracted {len(extracted_nodes)} extended nodes (requested: {total_nodes_needed})")
+            return extracted_nodes
             
         except Exception as e:
-            logger.error(f"Failed to get local search nodes: {e}")
-            return []
+            logger.error(f"Failed to extract extended nodes: {e}")
+            raise CausalSearchError(f"Node extraction failed: {e}")
 
-    async def _get_additional_causal_nodes(
-        self, 
-        query: str,
-        **kwargs
-    ) -> list:
-        """Get additional s nodes for causal analysis using causal heuristics."""
-        try:
-            # Get the s_parameter value
-            s_parameter = getattr(self, 's_parameter', 3)
-            
-            if s_parameter <= 0:
-                logger.info("s_parameter is 0 or negative, no additional nodes needed")
-                return []
-            
-            # Cast to LocalSearchMixedContext to access the attributes
-            from graphrag.query.structured_search.local_search.mixed_context import LocalSearchMixedContext
-            if not isinstance(self.context_builder, LocalSearchMixedContext):
-                logger.warning("Context builder is not LocalSearchMixedContext, cannot extract additional nodes")
-                return []
-            
-            # Use causal analysis heuristics to find additional nodes
-            # Strategy 1: Find entities with high relationship counts (potential causal hubs)
-            # Strategy 2: Find entities mentioned in community reports (potential causal factors)
-            # Strategy 3: Find entities with high rank but not in top-k
-            
-            additional_nodes = []
-            
-            # Strategy 1: High relationship count entities
-            if hasattr(self.context_builder, 'relationships') and self.context_builder.relationships:
-                # Sort entities by relationship count
-                entity_relationship_counts = {}
-                for rel in self.context_builder.relationships.values():
-                    source = rel.source
-                    target = rel.target
-                    entity_relationship_counts[source] = entity_relationship_counts.get(source, 0) + 1
-                    entity_relationship_counts[target] = entity_relationship_counts.get(target, 0) + 1
-                
-                # Get top entities by relationship count
-                high_relationship_entities = sorted(
-                    entity_relationship_counts.items(), 
-                    key=lambda x: x[1], 
-                    reverse=True
-                )
-                
-                # Add top entities that aren't already in local search
-                local_nodes = await self._get_local_search_nodes(query, 10, **kwargs)  # Get more for comparison
-                for entity_name, _ in high_relationship_entities[:s_parameter * 2]:  # Get 2x more for filtering
-                    if entity_name not in local_nodes and len(additional_nodes) < s_parameter:
-                        additional_nodes.append(entity_name)
-            
-            # Strategy 2: Entities from community reports
-            if hasattr(self.context_builder, 'community_reports') and self.context_builder.community_reports:
-                for community_id, community in self.context_builder.community_reports.items():
-                    if len(additional_nodes) >= s_parameter:
-                        break
-                    
-                    # Look for entity mentions in community descriptions
-                    # Use getattr to safely access attributes that may not exist
-                    community_desc = getattr(community, 'description', None)
-                    if community_desc:
-                        # Simple entity extraction from description
-                        # This could be enhanced with more sophisticated NLP
-                        for entity_name in self.context_builder.entities.keys():
-                            if entity_name in community_desc and entity_name not in additional_nodes:
-                                additional_nodes.append(entity_name)
-                                if len(additional_nodes) >= s_parameter:
-                                    break
-            
-            # Strategy 3: High rank entities not in top-k
-            if hasattr(self.context_builder, 'entities') and self.context_builder.entities:
-                # Sort entities by rank
-                sorted_entities = sorted(
-                    self.context_builder.entities.values(),
-                    key=lambda x: x.rank if hasattr(x, 'rank') and x.rank else 0,
-                    reverse=True
-                )
-                
-                local_nodes = await self._get_local_search_nodes(query, 10, **kwargs)
-                for entity in sorted_entities:
-                    if len(additional_nodes) >= s_parameter:
-                        break
-                    if entity.id not in local_nodes and entity.id not in additional_nodes:
-                        additional_nodes.append(entity.id)
-            
-            logger.info(f"Extracted {len(additional_nodes)} additional causal nodes using s_parameter={s_parameter}")
-            return additional_nodes[:s_parameter]  # Ensure we only return s_parameter nodes
-            
-        except Exception as e:
-            logger.error(f"Failed to get additional causal nodes: {e}")
-            return []
+
 
     async def _extract_graph_information(
         self, 
         selected_nodes: list,
         **kwargs
     ) -> Any:
-        """Reuse local search components to extract graph information."""
+        """Extract graph information for the selected nodes using context builder filtering."""
         try:
-            # Use the context builder to extract graph information
-            # This reuses the local search context building logic
-            # Pass the selected nodes to focus the context on them
+            # Use the context builder to extract graph information for selected nodes
+            # The nodes were already selected in the previous step, now we build context
+            # with the current configuration (which will apply token-based filtering)
             context_result = self.context_builder.build_context(
-                query="",  # Empty query since we already have selected nodes
-                **self.context_builder_params
+                query="",  # Empty query since we already have selected nodes via top_k override
+                **self.context_builder_params  # This will apply token limits and filtering
             )
             
-            logger.info(f"Extracted graph information with context length: {len(context_result.context_chunks) if context_result.context_chunks else 0}")
+            logger.info(f"✅ Extracted graph information for {len(selected_nodes)} nodes")
+            logger.info(f"Context length: {len(context_result.context_chunks) if context_result.context_chunks else 0} chars")
+            
+            # Log context records for debugging
+            if hasattr(context_result, 'context_records') and context_result.context_records:
+                entities_count = len(context_result.context_records.get('entities', pd.DataFrame()))
+                relationships_count = len(context_result.context_records.get('relationships', pd.DataFrame()))
+                text_units_count = len(context_result.context_records.get('sources', pd.DataFrame()))
+                logger.info(f"Context records: {entities_count} entities, {relationships_count} relationships, {text_units_count} text units")
+            
             return context_result
             
         except Exception as e:
