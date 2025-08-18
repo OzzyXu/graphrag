@@ -57,7 +57,7 @@ causal_search:
 graphrag query \
   --root ./ragtest \
   --method causal \
-  --query "What are the causal relationships in this dataset?"
+  --query "Who is Scrooge and what are his main relationships?"
 
 # With streaming
 graphrag query \

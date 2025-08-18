@@ -494,9 +494,16 @@ Add sections and commentary to the response as appropriate for the length and fo
                 for entity_id, entity in self.context_builder.entities.items():
                     entity_dict = {
                         'id': entity.id,
+                        'short_id': getattr(entity, 'short_id', None),
                         'title': getattr(entity, 'title', ''),
-                        'rank': getattr(entity, 'rank', 0),
-                        'description': getattr(entity, 'description', '')
+                        'type': getattr(entity, 'type', None),
+                        'description': getattr(entity, 'description', ''),
+                        'description_embedding': getattr(entity, 'description_embedding', None),
+                        'name_embedding': getattr(entity, 'name_embedding', None),
+                        'community_ids': getattr(entity, 'community_ids', None),
+                        'text_unit_ids': getattr(entity, 'text_unit_ids', None),
+                        'rank': getattr(entity, 'rank', 1),
+                        'attributes': getattr(entity, 'attributes', None),
                     }
                     entities_list.append(entity_dict)
                 network_data["entities"] = entities_list
@@ -509,10 +516,15 @@ Add sections and commentary to the response as appropriate for the length and fo
                 for rel_id, rel in self.context_builder.relationships.items():
                     rel_dict = {
                         'id': rel.id,
+                        'short_id': getattr(rel, 'short_id', None),
                         'source': rel.source,
                         'target': rel.target,
-                        'type': getattr(rel, 'type', ''),
-                        'weight': getattr(rel, 'weight', 1.0)
+                        'weight': getattr(rel, 'weight', 1.0),
+                        'description': getattr(rel, 'description', None),
+                        'description_embedding': getattr(rel, 'description_embedding', None),
+                        'text_unit_ids': getattr(rel, 'text_unit_ids', None),
+                        'rank': getattr(rel, 'rank', 1),
+                        'attributes': getattr(rel, 'attributes', None),
                     }
                     relationships_list.append(rel_dict)
                 network_data["relationships"] = relationships_list
@@ -525,9 +537,14 @@ Add sections and commentary to the response as appropriate for the length and fo
                     for unit_id, unit in self.context_builder.text_units.items():
                         unit_dict = {
                             'id': unit.id,
+                            'short_id': getattr(unit, 'short_id', None),
                             'text': getattr(unit, 'text', ''),
-                            'n_tokens': getattr(unit, 'n_tokens', 0),
-                            'document_ids': getattr(unit, 'document_ids', [])
+                            'entity_ids': getattr(unit, 'entity_ids', None),
+                            'relationship_ids': getattr(unit, 'relationship_ids', None),
+                            'covariate_ids': getattr(unit, 'covariate_ids', None),
+                            'n_tokens': getattr(unit, 'n_tokens', None),
+                            'document_ids': getattr(unit, 'document_ids', None),
+                            'attributes': getattr(unit, 'attributes', None),
                         }
                         text_units_list.append(unit_dict)
                     network_data["text_units"] = text_units_list
