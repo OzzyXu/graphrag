@@ -457,17 +457,26 @@ Add sections and commentary to the response as appropriate for the length and fo
             
             # Extract entities from context
             if hasattr(graph_context, 'context_records') and graph_context.context_records:
+                logger.debug(f"Context records keys: {list(graph_context.context_records.keys())}")
+                
                 entities_df = graph_context.context_records.get('entities', pd.DataFrame())
                 if not entities_df.empty:
                     network_data["entities"] = entities_df.to_dict('records')
+                    logger.debug(f"Found {len(entities_df)} entities in context records")
                 
                 relationships_df = graph_context.context_records.get('relationships', pd.DataFrame())
                 if not relationships_df.empty:
                     network_data["relationships"] = relationships_df.to_dict('records')
+                    logger.debug(f"Found {len(relationships_df)} relationships in context records")
+                else:
+                    logger.debug("No relationships found in context records")
                 
                 text_units_df = graph_context.context_records.get('text_units', pd.DataFrame())
                 if not text_units_df.empty:
                     network_data["text_units"] = text_units_df.to_dict('records')
+                    logger.debug(f"Found {len(text_units_df)} text units in context records")
+                else:
+                    logger.debug("No text units found in context records")
                 
                 community_reports_df = graph_context.context_records.get('reports', pd.DataFrame())
                 if not community_reports_df.empty:
@@ -479,6 +488,7 @@ Add sections and commentary to the response as appropriate for the length and fo
             
             # If no entities found in context records, try to get from context builder directly
             if not network_data["entities"] and hasattr(self.context_builder, 'entities'):
+                logger.debug(f"No entities in context records, trying context builder with {len(self.context_builder.entities)} entities")
                 # Extract entities directly from context builder
                 entities_list = []
                 for entity_id, entity in self.context_builder.entities.items():
@@ -490,20 +500,38 @@ Add sections and commentary to the response as appropriate for the length and fo
                     }
                     entities_list.append(entity_dict)
                 network_data["entities"] = entities_list
+                logger.debug(f"Extracted {len(entities_list)} entities from context builder")
                 
-                # Extract relationships directly from context builder
-                if hasattr(self.context_builder, 'relationships'):
-                    relationships_list = []
-                    for rel_id, rel in self.context_builder.relationships.items():
-                        rel_dict = {
-                            'id': rel.id,
-                            'source': rel.source,
-                            'target': rel.target,
-                            'type': getattr(rel, 'type', ''),
-                            'weight': getattr(rel, 'weight', 1.0)
+            # Extract relationships directly from context builder (even if entities were found in context records)
+            if not network_data["relationships"] and hasattr(self.context_builder, 'relationships'):
+                logger.debug(f"No relationships in context records, trying context builder with {len(self.context_builder.relationships)} relationships")
+                relationships_list = []
+                for rel_id, rel in self.context_builder.relationships.items():
+                    rel_dict = {
+                        'id': rel.id,
+                        'source': rel.source,
+                        'target': rel.target,
+                        'type': getattr(rel, 'type', ''),
+                        'weight': getattr(rel, 'weight', 1.0)
+                    }
+                    relationships_list.append(rel_dict)
+                network_data["relationships"] = relationships_list
+                logger.debug(f"Extracted {len(relationships_list)} relationships from context builder")
+                
+                # Extract text units directly from context builder (even if other data was found in context records)
+                if not network_data["text_units"] and hasattr(self.context_builder, 'text_units'):
+                    logger.debug(f"No text units in context records, trying context builder with {len(self.context_builder.text_units)} text units")
+                    text_units_list = []
+                    for unit_id, unit in self.context_builder.text_units.items():
+                        unit_dict = {
+                            'id': unit.id,
+                            'text': getattr(unit, 'text', ''),
+                            'n_tokens': getattr(unit, 'n_tokens', 0),
+                            'document_ids': getattr(unit, 'document_ids', [])
                         }
-                        relationships_list.append(rel_dict)
-                    network_data["relationships"] = relationships_list
+                        text_units_list.append(unit_dict)
+                    network_data["text_units"] = text_units_list
+                    logger.debug(f"Extracted {len(text_units_list)} text units from context builder")
                 
                 # Extract community reports directly from context builder
                 if hasattr(self.context_builder, 'community_reports'):
@@ -544,8 +572,25 @@ Add sections and commentary to the response as appropriate for the length and fo
             # Extract content from response
             if hasattr(response, 'content') and response.content:
                 response_content = response.content
+                logger.debug(f"Extracted content successfully from response.content")
             else:
-                response_content = str(response)
+                logger.warning(f"Response object has no content attribute or content is empty. Response type: {type(response)}")
+                # Try to extract from string representation if it's BaseModelOutput format
+                response_str = str(response)
+                if 'BaseModelOutput(content=' in response_str:
+                    # Extract content from the string representation
+                    import re
+                    # Handle multi-line content properly
+                    match = re.search(r"content='(.*?)', full_response=", response_str, re.DOTALL)
+                    if match:
+                        response_content = match.group(1).replace('\\n', '\n').replace("\\'", "'").replace('\\"', '"')
+                        logger.debug(f"Extracted content from string representation")
+                    else:
+                        response_content = response_str
+                        logger.warning(f"Could not extract content from BaseModelOutput string")
+                else:
+                    response_content = response_str
+            
             logger.info(f"Generated causal report of length {len(response_content)}")
             return response_content
             
@@ -572,7 +617,27 @@ Add sections and commentary to the response as appropriate for the length and fo
             )
             
             # Extract content from response
-            response_content = response.content if hasattr(response, 'content') else str(response)
+            if hasattr(response, 'content') and response.content:
+                response_content = response.content
+                logger.debug(f"Extracted final response content successfully from response.content")
+            else:
+                logger.warning(f"Final response object has no content attribute or content is empty. Response type: {type(response)}")
+                # Try to extract from string representation if it's BaseModelOutput format
+                response_str = str(response)
+                if 'BaseModelOutput(content=' in response_str:
+                    # Extract content from the string representation
+                    import re
+                    # Handle multi-line content properly
+                    match = re.search(r"content='(.*?)', full_response=", response_str, re.DOTALL)
+                    if match:
+                        response_content = match.group(1).replace('\\n', '\n').replace("\\'", "'").replace('\\"', '"')
+                        logger.debug(f"Extracted final response content from string representation")
+                    else:
+                        response_content = response_str
+                        logger.warning(f"Could not extract final response content from BaseModelOutput string")
+                else:
+                    response_content = response_str
+            
             logger.info(f"Generated final response of length {len(response_content)}")
             return response_content
             
