@@ -20,6 +20,7 @@ output/lancedb
 venv/
 .conda
 .tmp
+logs/
 
 .env
 build.zip
