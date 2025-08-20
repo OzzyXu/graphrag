@@ -399,60 +399,65 @@ class LocalSearchMixedContext(LocalContextBuilder):
         )
         entity_tokens = num_tokens(entity_context, self.token_encoder)
 
-        # build relationship-covariate context
-        added_entities = []
+        # Fixed algorithm: build relationship-covariate context without incremental reversion
+        # Use smarter token allocation to avoid the "revert to previous state" bug
+        local_context_allocation = 0.6  # Allocate 60% of tokens for relationships and covariates
+        relationship_budget_tokens = int(max_context_tokens * local_context_allocation)
+        
         final_context = []
         final_context_data = {}
 
-        # gradually add entities and associated metadata to the context until we reach limit
-        for entity in selected_entities:
-            current_context = []
-            current_context_data = {}
-            added_entities.append(entity)
+        # Calculate reasonable relationship budget to avoid token explosion
+        # Cap the relationship count to prevent excessive token usage
+        max_relationship_budget = min(
+            top_k_relationships * len(selected_entities),
+            100  # Cap at 100 relationships to avoid token issues
+        )
 
-            # build relationship context
-            (
-                relationship_context,
-                relationship_context_data,
-            ) = build_relationship_context(
-                selected_entities=added_entities,
-                relationships=list(self.relationships.values()),
-                token_encoder=self.token_encoder,
-                max_context_tokens=max_context_tokens,
-                column_delimiter=column_delimiter,
-                top_k_relationships=top_k_relationships,
-                include_relationship_weight=include_relationship_weight,
-                relationship_ranking_attribute=relationship_ranking_attribute,
-                context_name="Relationships",
-            )
-            current_context.append(relationship_context)
-            current_context_data["relationships"] = relationship_context_data
-            total_tokens = entity_tokens + num_tokens(
-                relationship_context, self.token_encoder
-            )
+        # Build relationship context for all selected entities at once
+        # This avoids the problematic incremental processing
+        (
+            relationship_context,
+            relationship_context_data,
+        ) = build_relationship_context(
+            selected_entities=selected_entities,
+            relationships=list(self.relationships.values()),
+            token_encoder=self.token_encoder,
+            max_context_tokens=relationship_budget_tokens,
+            column_delimiter=column_delimiter,
+            top_k_relationships=max_relationship_budget,
+            include_relationship_weight=include_relationship_weight,
+            relationship_ranking_attribute=relationship_ranking_attribute,
+            context_name="Relationships",
+        )
+        
+        final_context.append(relationship_context)
+        final_context_data["relationships"] = relationship_context_data
+        
+        # Calculate remaining tokens for covariates
+        relationship_tokens = num_tokens(relationship_context, self.token_encoder)
+        remaining_tokens = max(relationship_budget_tokens - relationship_tokens, 0)
 
-            # build covariate context
-            for covariate in self.covariates:
-                covariate_context, covariate_context_data = build_covariates_context(
-                    selected_entities=added_entities,
-                    covariates=self.covariates[covariate],
-                    token_encoder=self.token_encoder,
-                    max_context_tokens=max_context_tokens,
-                    column_delimiter=column_delimiter,
-                    context_name=covariate,
-                )
-                total_tokens += num_tokens(covariate_context, self.token_encoder)
-                current_context.append(covariate_context)
-                current_context_data[covariate.lower()] = covariate_context_data
-
-            if total_tokens > max_context_tokens:
-                logger.warning(
-                    "Reached token limit - reverting to previous context state"
-                )
+        # Build covariate context with remaining token budget
+        for covariate in self.covariates:
+            if remaining_tokens <= 0:
                 break
-
-            final_context = current_context
-            final_context_data = current_context_data
+                
+            covariate_context, covariate_context_data = build_covariates_context(
+                selected_entities=selected_entities,
+                covariates=self.covariates[covariate],
+                token_encoder=self.token_encoder,
+                max_context_tokens=remaining_tokens,
+                column_delimiter=column_delimiter,
+                context_name=covariate,
+            )
+            
+            covariate_tokens = num_tokens(covariate_context, self.token_encoder)
+            if covariate_tokens <= remaining_tokens:
+                final_context.append(covariate_context)
+                final_context_data[covariate.lower()] = covariate_context_data
+                remaining_tokens -= covariate_tokens
+            # If covariate doesn't fit, skip it rather than reverting everything
 
         # attach entity context to final context
         final_context_text = entity_context + "\n\n" + "\n\n".join(final_context)
