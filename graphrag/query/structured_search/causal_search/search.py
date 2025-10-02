@@ -162,6 +162,7 @@ Add sections and commentary to the response as appropriate for the length and fo
             (
                 graph_context,
                 discovery_payload,
+                discovery_meta,
                 causal_report,
                 discovery_prompt,
                 discovery_llm_calls,
@@ -183,6 +184,7 @@ Add sections and commentary to the response as appropriate for the length and fo
                 final_response,
                 summary_prompt,
                 trimmed_report,
+                summary_meta,
             ) = await self._generate_final_response(causal_report, query)
             logger.info(
                 "✅ Step 5 complete: Final response generated (%s characters)",
@@ -203,7 +205,13 @@ Add sections and commentary to the response as appropriate for the length and fo
             
             # Save outputs if configured
             logger.info(f"🔍 Step 6: Saving outputs if configured")
-            await self._save_outputs(discovery_payload, trimmed_report, query)
+            await self._save_outputs(
+                discovery_payload,
+                discovery_meta,
+                trimmed_report,
+                summary_meta,
+                query,
+            )
             logger.info(f"✅ Step 6 complete: Outputs saved")
             
             for callback in self.callbacks:
@@ -239,6 +247,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         (
             graph_context,
             discovery_payload,
+            discovery_meta,
             causal_report,
             _discovery_prompt,
             _llm_calls,
@@ -254,6 +263,12 @@ Add sections and commentary to the response as appropriate for the length and fo
             causal_report,
             summary_context_limit,
         )
+        summary_meta = self._build_trim_meta(
+            original_text=causal_report,
+            trimmed_text=trimmed_report,
+            token_limit=summary_context_limit,
+        )
+        summary_meta["stage"] = "response_generation"
 
         async for chunk in self._stream_final_response(trimmed_report, query):
             for callback in self.callbacks:
@@ -263,15 +278,23 @@ Add sections and commentary to the response as appropriate for the length and fo
         for callback in self.callbacks:
             callback.on_context(graph_context.context_records)
 
-        await self._save_outputs(discovery_payload, trimmed_report, query)
+        await self._save_outputs(
+            discovery_payload,
+            discovery_meta,
+            trimmed_report,
+            summary_meta,
+            query,
+        )
 
     async def _run_discovery_stage(
         self,
         query: str,
+        conversation_history: ConversationHistory | None = None,
         **kwargs,
     ) -> tuple[
         Any,
         str,
+        dict[str, Any],
         str,
         str,
         dict[str, int],
@@ -297,6 +320,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         ) = await self._extract_extended_nodes(
             query,
             local_search_top_k,
+            conversation_history=conversation_history,
             **kwargs,
         )
         logger.info(
@@ -314,6 +338,7 @@ Add sections and commentary to the response as appropriate for the length and fo
             query,
             extended_nodes,
             extended_entity_names,
+             conversation_history=conversation_history,
             **kwargs,
         )
         logger.info("✅ Step 2 complete: Graph context extracted")
@@ -332,7 +357,9 @@ Add sections and commentary to the response as appropriate for the length and fo
         logger.info(
             "🔍 Step 3: Formatting network data for causal discovery prompt",
         )
-        network_data = self._format_network_data_for_causal_prompt(graph_context)
+        network_data, network_meta = self._format_network_data_for_causal_prompt(
+            graph_context
+        )
         logger.info(
             "✅ Step 3 complete: Network data formatted (%s characters)",
             len(network_data),
@@ -360,9 +387,12 @@ Add sections and commentary to the response as appropriate for the length and fo
             self.token_encoder,
         )
 
+        network_meta["stage"] = "causal_discovery_payload"
+
         return (
             graph_context,
             discovery_payload,
+            network_meta,
             causal_report,
             discovery_prompt,
             llm_calls,
@@ -395,6 +425,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         self,
         query: str,
         local_search_top_k: int,
+        conversation_history: ConversationHistory | None = None,
         **kwargs,
     ) -> tuple[list[str], list[str]]:
         """Extract extended entity identifiers and corresponding titles for context expansion."""
@@ -411,7 +442,8 @@ Add sections and commentary to the response as appropriate for the length and fo
             params['top_k_mapped_entities'] = total_nodes_needed  # Request all nodes needed
             context_result = self.context_builder.build_context(
                 query=query,
-                **params
+                conversation_history=conversation_history,
+                **params,
             )
             
             # Extract entity IDs from the context
@@ -511,6 +543,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         query: str,
         selected_nodes: list[str],
         selected_entity_names: list[str],
+        conversation_history: ConversationHistory | None = None,
         **kwargs,
     ) -> Any:
         """Extract graph information seeded by the original query and selected entity names."""
@@ -533,6 +566,7 @@ Add sections and commentary to the response as appropriate for the length and fo
 
             context_result = self.context_builder.build_context(
                 query=query,
+                conversation_history=conversation_history,
                 **context_params,
             )
             
@@ -552,7 +586,9 @@ Add sections and commentary to the response as appropriate for the length and fo
             logger.error(f"Failed to extract graph information: {e}")
             raise CausalSearchError(f"Graph information extraction failed: {e}")
 
-    def _format_network_data_for_causal_prompt(self, graph_context: Any) -> str:
+    def _format_network_data_for_causal_prompt(
+        self, graph_context: Any
+    ) -> tuple[str, dict[str, Any]]:
         """Format extracted graph information for causal discovery prompt with context truncation."""
         try:
             from graphrag.query.llm.text_utils import num_tokens
@@ -572,6 +608,8 @@ Add sections and commentary to the response as appropriate for the length and fo
                 "text_units": [],
                 "community_reports": []
             }
+            sections_meta: dict[str, dict[str, Any]] = {}
+            trimmed_flags: list[bool] = []
             
             # Extract entities from context with selective fields and token limits
             if hasattr(graph_context, 'context_records') and graph_context.context_records:
@@ -579,16 +617,28 @@ Add sections and commentary to the response as appropriate for the length and fo
                 
                 entities_df = graph_context.context_records.get('entities', pd.DataFrame())
                 if not entities_df.empty:
-                    network_data["entities"] = self._truncate_entities_for_context(
+                    (
+                        entities_payload,
+                        entities_meta,
+                    ) = self._truncate_entities_for_context(
                         entities_df, entity_token_limit
                     )
+                    network_data["entities"] = entities_payload
+                    sections_meta["entities"] = entities_meta
+                    trimmed_flags.append(entities_meta.get("trimmed", False))
                     logger.debug(f"Found {len(entities_df)} entities, truncated to {len(network_data['entities'])} for context")
                 
                 relationships_df = graph_context.context_records.get('relationships', pd.DataFrame())
                 if not relationships_df.empty:
-                    network_data["relationships"] = self._truncate_relationships_for_context(
+                    (
+                        relationships_payload,
+                        relationships_meta,
+                    ) = self._truncate_relationships_for_context(
                         relationships_df, relationship_token_limit
                     )
+                    network_data["relationships"] = relationships_payload
+                    sections_meta["relationships"] = relationships_meta
+                    trimmed_flags.append(relationships_meta.get("trimmed", False))
                     logger.debug(f"Found {len(relationships_df)} relationships, truncated to {len(network_data['relationships'])} for context")
                 else:
                     logger.debug("No relationships found in context records")
@@ -598,9 +648,15 @@ Add sections and commentary to the response as appropriate for the length and fo
                     text_units_df = graph_context.context_records.get('sources', pd.DataFrame())
 
                 if not text_units_df.empty:
-                    network_data["text_units"] = self._truncate_text_units_for_context(
+                    (
+                        text_units_payload,
+                        text_units_meta,
+                    ) = self._truncate_text_units_for_context(
                         text_units_df, text_unit_token_limit
                     )
+                    network_data["text_units"] = text_units_payload
+                    sections_meta["text_units"] = text_units_meta
+                    trimmed_flags.append(text_units_meta.get("trimmed", False))
                     logger.debug(f"Found {len(text_units_df)} text units, truncated to {len(network_data['text_units'])} for context")
                 else:
                     logger.debug("No text units found in context records")
@@ -617,28 +673,43 @@ Add sections and commentary to the response as appropriate for the length and fo
             if not network_data["entities"] and hasattr(self.context_builder, 'entities'):
                 logger.debug(f"No entities in context records, trying context builder with {len(self.context_builder.entities)} entities")
                 # Extract entities directly from context builder with truncation
-                entities_list = self._truncate_entities_from_context_builder(
+                (
+                    entities_list,
+                    entities_meta,
+                ) = self._truncate_entities_from_context_builder(
                     self.context_builder.entities, entity_token_limit
                 )
                 network_data["entities"] = entities_list
+                sections_meta.setdefault("entities", entities_meta)
+                trimmed_flags.append(entities_meta.get("trimmed", False))
                 logger.debug(f"Extracted {len(entities_list)} entities from context builder (truncated)")
                 
             # Extract relationships directly from context builder (even if entities were found in context records)
             if not network_data["relationships"] and hasattr(self.context_builder, 'relationships'):
                 logger.debug(f"No relationships in context records, trying context builder with {len(self.context_builder.relationships)} relationships")
-                relationships_list = self._truncate_relationships_from_context_builder(
+                (
+                    relationships_list,
+                    relationships_meta,
+                ) = self._truncate_relationships_from_context_builder(
                     self.context_builder.relationships, relationship_token_limit
                 )
                 network_data["relationships"] = relationships_list
+                sections_meta.setdefault("relationships", relationships_meta)
+                trimmed_flags.append(relationships_meta.get("trimmed", False))
                 logger.debug(f"Extracted {len(relationships_list)} relationships from context builder (truncated)")
                 
                 # Extract text units directly from context builder (even if other data was found in context records)
                 if not network_data["text_units"] and hasattr(self.context_builder, 'text_units'):
                     logger.debug(f"No text units in context records, trying context builder with {len(self.context_builder.text_units)} text units")
-                    text_units_list = self._truncate_text_units_from_context_builder(
+                    (
+                        text_units_list,
+                        text_units_meta,
+                    ) = self._truncate_text_units_from_context_builder(
                         self.context_builder.text_units, text_unit_token_limit
                     )
                     network_data["text_units"] = text_units_list
+                    sections_meta.setdefault("text_units", text_units_meta)
+                    trimmed_flags.append(text_units_meta.get("trimmed", False))
                     logger.debug(f"Extracted {len(text_units_list)} text units from context builder (truncated)")
                 
                 # Extract community reports directly from context builder
@@ -655,9 +726,15 @@ Add sections and commentary to the response as appropriate for the length and fo
             
             # Format as JSON string for prompt insertion
             formatted_data = json.dumps(network_data, indent=2, ensure_ascii=False)
+            meta = {
+                "trimmed": any(trimmed_flags),
+                "token_limit": max_total_tokens,
+                "sections": sections_meta,
+                "stage": "discovery_context",
+            }
             
             logger.info(f"Formatted network data with {len(network_data['entities'])} entities, {len(network_data['relationships'])} relationships")
-            return formatted_data
+            return formatted_data, meta
             
         except Exception as e:
             logger.error(f"Failed to format network data: {e}")
@@ -686,6 +763,83 @@ Add sections and commentary to the response as appropriate for the length and fo
         )
         return clipped
 
+    def _build_trim_meta(
+        self,
+        original_text: str,
+        trimmed_text: str,
+        token_limit: int | None,
+    ) -> dict[str, Any]:
+        """Collect metadata describing how much text was trimmed."""
+        if not original_text:
+            return {
+                "trimmed": False,
+                "original_tokens": 0,
+                "final_tokens": 0,
+                "token_limit": token_limit,
+            }
+
+        if self.token_encoder is not None:
+            try:
+                original_tokens = len(self.token_encoder.encode(original_text))
+                final_tokens = len(self.token_encoder.encode(trimmed_text))
+            except Exception:  # pragma: no cover - defensive fallback
+                original_tokens = len(original_text.split())
+                final_tokens = len(trimmed_text.split())
+        else:
+            original_tokens = len(original_text.split())
+            final_tokens = len(trimmed_text.split())
+
+        return {
+            "trimmed": final_tokens < original_tokens,
+            "original_tokens": original_tokens,
+            "final_tokens": final_tokens,
+            "token_limit": token_limit,
+        }
+
+    def _render_trim_note(self, meta: dict[str, Any] | None) -> str:
+        """Render a human-readable message describing trimming."""
+        if not meta:
+            return ""
+
+        trimmed = meta.get("trimmed")
+        original = meta.get("original_tokens")
+        final = meta.get("final_tokens")
+        limit = meta.get("token_limit")
+
+        if trimmed and original is not None and final is not None:
+            limit_text = f" (limit {limit})" if limit is not None else ""
+            return f"_Trimmed from {original} to {final} tokens{limit_text}._"
+
+        if original is not None and final is not None:
+            return f"_No trimming applied. Response uses {final} of {original} tokens._"
+
+        return ""
+
+    def _extract_response_text(self, response: Any, stage: str) -> str:
+        """Extract textual content from a chat model response."""
+        if response is None:
+            raise CausalSearchError(
+                f"{stage} LLM call returned no response object."
+            )
+
+        output = getattr(response, "output", None)
+        if output is not None:
+            content = getattr(output, "content", None)
+            if content:
+                return content
+
+        direct_content = getattr(response, "content", None)
+        if direct_content:
+            return direct_content
+
+        parsed = getattr(response, "parsed_response", None)
+        if parsed:
+            return str(parsed)
+
+        raise CausalSearchError(
+            f"{stage} LLM call returned no textual content."
+        )
+
     async def _generate_causal_report(
         self, network_data: str
     ) -> tuple[str, str, str]:
@@ -709,60 +863,11 @@ Add sections and commentary to the response as appropriate for the length and fo
                 model_parameters=self.model_params
             )
             
-            # Extract content from response - use the correct GraphRAG pattern
-            response_content = None
-            
-            # Method 1: Standard GraphRAG pattern - response.output.content
-            if hasattr(response, 'output') and hasattr(response.output, 'content'):
-                response_content = response.output.content or ""
-                logger.debug(f"Extracted content from response.output.content")
-            
-            # Method 2: Direct content attribute (fallback)
-            elif hasattr(response, 'content') and getattr(response, 'content', None):
-                response_content = response.content
-                logger.debug(f"Extracted content successfully from response.content")
-            
-            # Method 3: If response itself is a BaseModelOutput-like object, try various attributes
-            elif hasattr(response, 'parsed_response') and response.parsed_response:
-                response_content = response.parsed_response
-                logger.debug(f"Extracted content from response.parsed_response")
-            
-            # Method 4: Try to extract from string representation with improved regex
-            else:
-                logger.warning(f"Response object has no recognized content attribute. Response type: {type(response)}")
-                response_str = str(response)
-                
-                # Look for content in BaseModelOutput format with better patterns
-                import re
-                patterns = [
-                    r'BaseModelOutput\(content="(.*?)"(?:,|\))',  # Pattern 1: content="..."
-                    r"BaseModelOutput\(content='(.*?)'(?:,|\))",  # Pattern 2: content='...'
-                    r'content="(.*?)"',  # Pattern 3: Simple content="..."
-                    r"content='(.*?)'",  # Pattern 4: Simple content='...'
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, response_str, re.DOTALL)
-                    if match:
-                        response_content = match.group(1)
-                        # Unescape common escape sequences
-                        response_content = response_content.replace('\\n', '\n')
-                        response_content = response_content.replace("\\'", "'")
-                        response_content = response_content.replace('\\"', '"')
-                        response_content = response_content.replace('\\\\', '\\')
-                        logger.debug(f"Extracted content using pattern: {pattern}")
-                        break
-                
-                # If no pattern matched, use the full string as fallback
-                if response_content is None:
-                    response_content = response_str
-                    logger.warning(f"Could not extract content from response, using full string")
-            
-            # Ensure we have some content
-            if not response_content:
-                response_content = "Failed to generate causal analysis report - no content received from LLM"
-                logger.error("No content extracted from LLM response")
-            
+            response_content = self._extract_response_text(
+                response,
+                stage="causal_discovery",
+            )
+
             logger.info(f"Generated causal report of length {len(response_content)}")
             return response_content, formatted_prompt, trimmed_network_data
             
@@ -772,7 +877,7 @@ Add sections and commentary to the response as appropriate for the length and fo
 
     async def _generate_final_response(
         self, causal_report: str, user_query: str
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, dict[str, Any]]:
         """Generate final response using the causal summary prompt and return the prompt used."""
         try:
             # Load and format the causal summary prompt
@@ -795,68 +900,33 @@ Add sections and commentary to the response as appropriate for the length and fo
                 model_parameters=self.model_params
             )
             
-            # Extract content from response - use the correct GraphRAG pattern
-            response_content = None
-            
-            # Method 1: Standard GraphRAG pattern - response.output.content
-            if hasattr(response, 'output') and hasattr(response.output, 'content'):
-                response_content = response.output.content or ""
-                logger.debug(f"Extracted final response content from response.output.content")
-            
-            # Method 2: Direct content attribute (fallback)
-            elif hasattr(response, 'content') and getattr(response, 'content', None):
-                response_content = response.content
-                logger.debug(f"Extracted final response content successfully from response.content")
-            
-            # Method 3: If response itself is a BaseModelOutput-like object, try various attributes
-            elif hasattr(response, 'parsed_response') and response.parsed_response:
-                response_content = response.parsed_response
-                logger.debug(f"Extracted final response content from response.parsed_response")
-            
-            # Method 4: Try to extract from string representation with improved regex
-            else:
-                logger.warning(f"Final response object has no recognized content attribute. Response type: {type(response)}")
-                response_str = str(response)
-                
-                # Look for content in BaseModelOutput format with better patterns
-                import re
-                patterns = [
-                    r'BaseModelOutput\(content="(.*?)"(?:,|\))',  # Pattern 1: content="..."
-                    r"BaseModelOutput\(content='(.*?)'(?:,|\))",  # Pattern 2: content='...'
-                    r'content="(.*?)"',  # Pattern 3: Simple content="..."
-                    r"content='(.*?)'",  # Pattern 4: Simple content='...'
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, response_str, re.DOTALL)
-                    if match:
-                        response_content = match.group(1)
-                        # Unescape common escape sequences
-                        response_content = response_content.replace('\\n', '\n')
-                        response_content = response_content.replace("\\'", "'")
-                        response_content = response_content.replace('\\"', '"')
-                        response_content = response_content.replace('\\\\', '\\')
-                        logger.debug(f"Extracted final response content using pattern: {pattern}")
-                        break
-                
-                # If no pattern matched, use the full string as fallback
-                if response_content is None:
-                    response_content = response_str
-                    logger.warning(f"Could not extract final response content from response, using full string")
-            
-            # Ensure we have some content
-            if not response_content:
-                response_content = "Failed to generate final response - no content received from LLM"
-                logger.error("No content extracted from final response LLM call")
-            
+            response_content = self._extract_response_text(
+                response,
+                stage="response_generation",
+            )
+
+            summary_meta = self._build_trim_meta(
+                original_text=causal_report,
+                trimmed_text=trimmed_report,
+                token_limit=summary_context_limit,
+            )
+            summary_meta["stage"] = "response_generation"
+
             logger.info(f"Generated final response of length {len(response_content)}")
-            return response_content, formatted_prompt, trimmed_report
+            return response_content, formatted_prompt, trimmed_report, summary_meta
             
         except Exception as e:
             logger.error(f"Response generation failed: {e}")
             raise CausalSearchError(f"Response generation stage failed: {e}")
 
-    async def _save_outputs(self, network_data: str, causal_report: str, query: str):
+    async def _save_outputs(
+        self,
+        network_data: str,
+        network_meta: dict[str, Any] | None,
+        causal_report: str,
+        report_meta: dict[str, Any] | None,
+        query: str,
+    ):
         """Save outputs to data folder if enabled in configuration."""
         try:
             # Check if output saving is enabled
@@ -883,8 +953,22 @@ Add sections and commentary to the response as appropriate for the length and fo
             # Save network data if enabled
             if save_network_data:
                 network_data_file = outputs_dir / f"causal_search_network_data_{query_id}.json"
+                try:
+                    payload = json.loads(network_data)
+                except json.JSONDecodeError:
+                    payload = network_data
+
+                output_payload = {
+                    "payload": payload,
+                    "_trimmed_meta": network_meta or {
+                        "trimmed": False,
+                        "token_limit": None,
+                        "sections": {},
+                    },
+                }
+
                 with open(network_data_file, 'w', encoding='utf-8') as f:
-                    f.write(network_data)
+                    json.dump(output_payload, f, indent=2, ensure_ascii=False)
                 logger.info(f"Saved network data to {network_data_file}")
             
             # Save causal report if enabled
@@ -895,6 +979,10 @@ Add sections and commentary to the response as appropriate for the length and fo
                     f.write(f"**Query:** {query}\n\n")
                     f.write(f"**Generated:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                     f.write(causal_report)
+                    note = self._render_trim_note(report_meta)
+                    if note:
+                        f.write("\n\n---\n")
+                        f.write(note)
                 logger.info(f"Saved causal report to {causal_report_file}")
             
         except Exception as e:
@@ -929,12 +1017,20 @@ Add sections and commentary to the response as appropriate for the length and fo
         except Exception as e:
             logger.warning(f"Failed to save prompts: {e}")
 
-    def _truncate_entities_for_context(self, entities_df: pd.DataFrame, max_tokens: int) -> list[dict]:
+    def _truncate_entities_for_context(
+        self, entities_df: pd.DataFrame, max_tokens: int
+    ) -> tuple[list[dict], dict[str, Any]]:
         """Truncate entities to fit within token limit, using only essential fields."""
         from graphrag.query.llm.text_utils import num_tokens
         
         if entities_df.empty:
-            return []
+            return [], {
+                "trimmed": False,
+                "emitted": 0,
+                "available": 0,
+                "token_budget": max_tokens,
+                "tokens_used": 0,
+            }
         
         # Essential fields only (similar to local search approach)
         essential_fields = ['id', 'entity', 'description']
@@ -945,6 +1041,7 @@ Add sections and commentary to the response as appropriate for the length and fo
             
         entities_list = []
         current_tokens = 0
+        truncated_flag = False
         
         # Sort by rank if available (highest first), otherwise by order
         if 'rank' in entities_df.columns:
@@ -969,19 +1066,36 @@ Add sections and commentary to the response as appropriate for the length and fo
             entity_tokens = num_tokens(entity_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
             
             if current_tokens + entity_tokens > max_tokens:
+                truncated_flag = True
                 break
                 
             entities_list.append(entity_dict)
             current_tokens += entity_tokens
             
-        return entities_list
+        meta = {
+            "trimmed": truncated_flag or len(entities_list) < len(entities_df),
+            "emitted": len(entities_list),
+            "available": len(entities_df),
+            "token_budget": max_tokens,
+            "tokens_used": current_tokens,
+        }
+
+        return entities_list, meta
     
-    def _truncate_relationships_for_context(self, relationships_df: pd.DataFrame, max_tokens: int) -> list[dict]:
+    def _truncate_relationships_for_context(
+        self, relationships_df: pd.DataFrame, max_tokens: int
+    ) -> tuple[list[dict], dict[str, Any]]:
         """Truncate relationships to fit within token limit, using only essential fields."""
         from graphrag.query.llm.text_utils import num_tokens
         
         if relationships_df.empty:
-            return []
+            return [], {
+                "trimmed": False,
+                "emitted": 0,
+                "available": 0,
+                "token_budget": max_tokens,
+                "tokens_used": 0,
+            }
         
         # Essential fields only (similar to local search approach)
         essential_fields = ['id', 'source', 'target', 'description']
@@ -992,6 +1106,7 @@ Add sections and commentary to the response as appropriate for the length and fo
             
         relationships_list = []
         current_tokens = 0
+        truncated_flag = False
         
         # Sort by weight/rank if available (highest first), otherwise by order
         if 'weight' in relationships_df.columns:
@@ -1018,19 +1133,36 @@ Add sections and commentary to the response as appropriate for the length and fo
             rel_tokens = num_tokens(rel_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
             
             if current_tokens + rel_tokens > max_tokens:
+                truncated_flag = True
                 break
                 
             relationships_list.append(rel_dict)
             current_tokens += rel_tokens
             
-        return relationships_list
+        meta = {
+            "trimmed": truncated_flag or len(relationships_list) < len(relationships_df),
+            "emitted": len(relationships_list),
+            "available": len(relationships_df),
+            "token_budget": max_tokens,
+            "tokens_used": current_tokens,
+        }
+
+        return relationships_list, meta
     
-    def _truncate_text_units_for_context(self, text_units_df: pd.DataFrame, max_tokens: int) -> list[dict]:
+    def _truncate_text_units_for_context(
+        self, text_units_df: pd.DataFrame, max_tokens: int
+    ) -> tuple[list[dict], dict[str, Any]]:
         """Truncate text units to fit within token limit, using only essential fields.""" 
         from graphrag.query.llm.text_utils import num_tokens
         
         if text_units_df.empty:
-            return []
+            return [], {
+                "trimmed": False,
+                "emitted": 0,
+                "available": 0,
+                "token_budget": max_tokens,
+                "tokens_used": 0,
+            }
         
         # Essential fields only - focus on the text content and basic metadata
         essential_fields = ['id', 'text']
@@ -1039,6 +1171,8 @@ Add sections and commentary to the response as appropriate for the length and fo
             
         text_units_list = []
         current_tokens = 0
+        truncated_flag = False
+        truncated_text = False
         
         # Sort by token count if available (shorter first to fit more), otherwise by order
         if 'n_tokens' in text_units_df.columns:
@@ -1059,6 +1193,7 @@ Add sections and commentary to the response as appropriate for the length and fo
                         # Truncate text if it's too long
                         if field == 'text' and isinstance(value, str) and len(value) > 1000:
                             unit_dict[field] = value[:1000] + "..."
+                            truncated_text = True
                         else:
                             unit_dict[field] = value
                         
@@ -1067,22 +1202,41 @@ Add sections and commentary to the response as appropriate for the length and fo
             unit_tokens = num_tokens(unit_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
             
             if current_tokens + unit_tokens > max_tokens:
+                truncated_flag = True
                 break
                 
             text_units_list.append(unit_dict)
             current_tokens += unit_tokens
             
-        return text_units_list
+        meta = {
+            "trimmed": truncated_flag or truncated_text or len(text_units_list) < len(text_units_df),
+            "emitted": len(text_units_list),
+            "available": len(text_units_df),
+            "token_budget": max_tokens,
+            "tokens_used": current_tokens,
+            "text_truncated": truncated_text,
+        }
+
+        return text_units_list, meta
     
-    def _truncate_entities_from_context_builder(self, entities_dict: dict, max_tokens: int) -> list[dict]:
+    def _truncate_entities_from_context_builder(
+        self, entities_dict: dict, max_tokens: int
+    ) -> tuple[list[dict], dict[str, Any]]:
         """Truncate entities from context builder to fit within token limit."""
         from graphrag.query.llm.text_utils import num_tokens
         
         if not entities_dict:
-            return []
-            
+            return [], {
+                "trimmed": False,
+                "emitted": 0,
+                "available": 0,
+                "token_budget": max_tokens,
+                "tokens_used": 0,
+            }
+        
         entities_list = []
         current_tokens = 0
+        truncated_flag = False
         
         # Sort entities by rank if available (highest first)
         sorted_entities = sorted(
@@ -1106,22 +1260,40 @@ Add sections and commentary to the response as appropriate for the length and fo
             entity_tokens = num_tokens(entity_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
             
             if current_tokens + entity_tokens > max_tokens:
+                truncated_flag = True
                 break
                 
             entities_list.append(entity_dict)
             current_tokens += entity_tokens
             
-        return entities_list
+        meta = {
+            "trimmed": truncated_flag or len(entities_list) < len(entities_dict),
+            "emitted": len(entities_list),
+            "available": len(entities_dict),
+            "token_budget": max_tokens,
+            "tokens_used": current_tokens,
+        }
+
+        return entities_list, meta
     
-    def _truncate_relationships_from_context_builder(self, relationships_dict: dict, max_tokens: int) -> list[dict]:
+    def _truncate_relationships_from_context_builder(
+        self, relationships_dict: dict, max_tokens: int
+    ) -> tuple[list[dict], dict[str, Any]]:
         """Truncate relationships from context builder to fit within token limit."""
         from graphrag.query.llm.text_utils import num_tokens
         
         if not relationships_dict:
-            return []
-            
+            return [], {
+                "trimmed": False,
+                "emitted": 0,
+                "available": 0,
+                "token_budget": max_tokens,
+                "tokens_used": 0,
+            }
+        
         relationships_list = []
         current_tokens = 0
+        truncated_flag = False
         
         # Sort relationships by weight if available (highest first)
         sorted_relationships = sorted(
@@ -1146,22 +1318,41 @@ Add sections and commentary to the response as appropriate for the length and fo
             rel_tokens = num_tokens(rel_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
             
             if current_tokens + rel_tokens > max_tokens:
+                truncated_flag = True
                 break
                 
             relationships_list.append(rel_dict)
             current_tokens += rel_tokens
             
-        return relationships_list
+        meta = {
+            "trimmed": truncated_flag or len(relationships_list) < len(relationships_dict),
+            "emitted": len(relationships_list),
+            "available": len(relationships_dict),
+            "token_budget": max_tokens,
+            "tokens_used": current_tokens,
+        }
+
+        return relationships_list, meta
     
-    def _truncate_text_units_from_context_builder(self, text_units_dict: dict, max_tokens: int) -> list[dict]:
+    def _truncate_text_units_from_context_builder(
+        self, text_units_dict: dict, max_tokens: int
+    ) -> tuple[list[dict], dict[str, Any]]:
         """Truncate text units from context builder to fit within token limit."""
         from graphrag.query.llm.text_utils import num_tokens
         
         if not text_units_dict:
-            return []
-            
+            return [], {
+                "trimmed": False,
+                "emitted": 0,
+                "available": 0,
+                "token_budget": max_tokens,
+                "tokens_used": 0,
+            }
+        
         text_units_list = []
         current_tokens = 0
+        truncated_flag = False
+        truncated_text = False
         
         # Sort text units by token count if available (shorter first to fit more)
         sorted_text_units = sorted(
@@ -1176,6 +1367,7 @@ Add sections and commentary to the response as appropriate for the length and fo
             # Truncate text if it's too long
             if isinstance(text_content, str) and len(text_content) > 1000:
                 text_content = text_content[:1000] + "..."
+                truncated_text = True
                 
             unit_dict = {
                 'id': unit.id,
@@ -1188,9 +1380,19 @@ Add sections and commentary to the response as appropriate for the length and fo
             unit_tokens = num_tokens(unit_str, self.token_encoder if hasattr(self, 'token_encoder') else None)
             
             if current_tokens + unit_tokens > max_tokens:
+                truncated_flag = True
                 break
                 
             text_units_list.append(unit_dict)
             current_tokens += unit_tokens
             
-        return text_units_list
+        meta = {
+            "trimmed": truncated_flag or truncated_text or len(text_units_list) < len(text_units_dict),
+            "emitted": len(text_units_list),
+            "available": len(text_units_dict),
+            "token_budget": max_tokens,
+            "tokens_used": current_tokens,
+            "text_truncated": truncated_text,
+        }
+
+        return text_units_list, meta

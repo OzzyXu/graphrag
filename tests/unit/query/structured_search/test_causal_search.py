@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -7,7 +8,14 @@ import tiktoken
 
 from graphrag.data_model.entity import Entity
 from graphrag.query.context_builder.builders import ContextBuilderResult, LocalContextBuilder
-from graphrag.query.structured_search.causal_search.search import CausalSearch
+from graphrag.query.context_builder.conversation_history import (
+    ConversationHistory,
+    ConversationRole,
+)
+from graphrag.query.structured_search.causal_search.search import (
+    CausalSearch,
+    CausalSearchError,
+)
 
 
 class FakeChatModel:
@@ -30,6 +38,17 @@ class FakeChatModel:
         for chunk in self.stream_chunks:
             await asyncio.sleep(0)
             yield chunk
+
+
+class EmptyResponseModel(FakeChatModel):
+    """Chat model stub that returns empty outputs to trigger error handling."""
+
+    def __init__(self):
+        super().__init__(responses=[])
+
+    async def achat(self, prompt: str, history: list | None = None, **kwargs):
+        self.achat_calls.append({"prompt": prompt, "history": history or []})
+        return SimpleNamespace(output=SimpleNamespace(content=""))
 
 
 class RecordingContextBuilder(LocalContextBuilder):
@@ -58,8 +77,15 @@ class RecordingContextBuilder(LocalContextBuilder):
         self.text_units = {}
         self.community_reports = {}
 
-    def build_context(self, query: str, **kwargs) -> ContextBuilderResult:
-        self.build_calls.append({"query": query, "kwargs": kwargs})
+    def build_context(
+        self,
+        query: str,
+        conversation_history=None,
+        **kwargs,
+    ) -> ContextBuilderResult:
+        call_kwargs = dict(kwargs)
+        call_kwargs["conversation_history"] = conversation_history
+        self.build_calls.append({"query": query, "kwargs": call_kwargs})
         context_records = {
             "entities": self._entities_df.copy(),
             "sources": self._sources_df.copy(),
@@ -135,3 +161,91 @@ async def test_stream_search_streams_llm_tokens():
 
     assert chunks == ["alpha", "beta"]
     assert model.achat_stream_calls  # streaming interface invoked
+
+
+@pytest.mark.asyncio
+async def test_causal_search_includes_conversation_history():
+    model = FakeChatModel(responses=["Report", "Answer"])
+    context_builder = RecordingContextBuilder()
+    encoder = tiktoken.get_encoding("cl100k_base")
+
+    searcher = CausalSearch(
+        model=model,
+        context_builder=context_builder,
+        token_encoder=encoder,
+        model_params={},
+        context_builder_params={"top_k_mapped_entities": 1},
+        s_parameter=1,
+        max_context_tokens=200,
+    )
+
+    history = ConversationHistory()
+    history.add_turn(ConversationRole.USER, "Previous question")
+    history.add_turn(ConversationRole.ASSISTANT, "Previous answer")
+
+    await searcher.search("New question", conversation_history=history)
+
+    for call in context_builder.build_calls:
+        assert call["kwargs"]["conversation_history"] is history
+
+
+@pytest.mark.asyncio
+async def test_causal_search_output_files_include_trim_markers(tmp_path):
+    long_report = "TOKEN " * 2200
+    model = FakeChatModel(responses=[long_report, "Final response"])
+    context_builder = RecordingContextBuilder()
+    encoder = tiktoken.get_encoding("cl100k_base")
+
+    searcher = CausalSearch(
+        model=model,
+        context_builder=context_builder,
+        token_encoder=encoder,
+        model_params={},
+        context_builder_params={
+            "top_k_mapped_entities": 1,
+            "save_network_data": True,
+            "save_causal_report": True,
+            "output_folder": "causal_test",
+            "output_base_dir": str(tmp_path),
+        },
+        s_parameter=1,
+        max_context_tokens=200,
+    )
+
+    searcher._generate_query_id = lambda _: "case"  # type: ignore[assignment]
+
+    await searcher.search("Explain causes")
+
+    output_dir = tmp_path / "causal_test"
+    network_file = output_dir / "causal_search_network_data_case.json"
+    report_file = output_dir / "causal_search_report_case.md"
+
+    assert network_file.exists()
+    assert report_file.exists()
+
+    network_payload = json.loads(network_file.read_text())
+    assert "_trimmed_meta" in network_payload
+    assert "payload" in network_payload
+
+    report_text = report_file.read_text()
+    assert "Trimmed from" in report_text
+
+
+@pytest.mark.asyncio
+async def test_causal_search_raises_when_model_returns_no_content():
+    model = EmptyResponseModel()
+    context_builder = RecordingContextBuilder()
+    encoder = tiktoken.get_encoding("cl100k_base")
+
+    searcher = CausalSearch(
+        model=model,
+        context_builder=context_builder,
+        token_encoder=encoder,
+        model_params={},
+        context_builder_params={"top_k_mapped_entities": 1},
+        s_parameter=1,
+        max_context_tokens=200,
+    )
+
+    with pytest.raises(CausalSearchError):
+        await searcher.search("Why")

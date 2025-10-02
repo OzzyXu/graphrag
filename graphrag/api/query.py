@@ -1433,22 +1433,6 @@ async def multi_index_causal_search(
         message = "Streaming not yet implemented for multi_causal_search"
         raise NotImplementedError(message)
 
-    # Prepare data structures for merging
-    links = {
-        "entities": {},
-        "relationships": {},
-        "text_units": {},
-        "community_reports": {},
-        "covariates": {},
-    }
-    max_vals = {
-        "entities": 0,
-        "relationships": 0,
-        "text_units": 0,
-        "community_reports": 0,
-        "covariates": 0,
-    }
-
     entities_dfs = []
     communities_dfs = []
     relationships_dfs = []
@@ -1458,79 +1442,48 @@ async def multi_index_causal_search(
 
     for idx, index_name in enumerate(index_names):
         # Prepare entities
-        entities_df = entities_list[idx]
-        for i in range(entities_df.shape[0]):
-            links["entities"][i + max_vals["entities"]] = {
-                "index_name": index_name,
-                "id": i,
-            }
+        entities_df = entities_list[idx].copy()
         entities_df["id"] = entities_df["id"].apply(
             lambda x, index_name=index_name: f"{x}-{index_name}"
         )
-        max_vals["entities"] += entities_df.shape[0]
         entities_dfs.append(entities_df)
 
         # Prepare communities
-        communities_df = communities_list[idx]
+        communities_df = communities_list[idx].copy()
         communities_df["community"] = communities_df["community"].apply(
             lambda x, index_name=index_name: [i + f"-{index_name}" for i in x]
         )
-        max_vals["communities"] = int(communities_df["community"].max())
         communities_dfs.append(communities_df)
 
         # Prepare relationships
-        relationships_df = relationships_list[idx]
-        for i in range(relationships_df.shape[0]):
-            links["relationships"][i + max_vals["relationships"]] = {
-                "index_name": index_name,
-                "id": i,
-            }
+        relationships_df = relationships_list[idx].copy()
         relationships_df["id"] = relationships_df["id"].apply(
             lambda x, index_name=index_name: f"{x}-{index_name}"
         )
-        max_vals["relationships"] += relationships_df.shape[0]
         relationships_dfs.append(relationships_df)
 
         # Prepare text units
-        text_units_df = text_units_list[idx]
-        for i in range(text_units_df.shape[0]):
-            links["text_units"][i + max_vals["text_units"]] = {
-                "index_name": index_name,
-                "id": i,
-            }
+        text_units_df = text_units_list[idx].copy()
         text_units_df["id"] = text_units_df["id"].apply(
             lambda x, index_name=index_name: f"{x}-{index_name}"
         )
-        max_vals["text_units"] += text_units_df.shape[0]
         text_units_dfs.append(text_units_df)
 
         # Prepare community reports
-        community_reports_df = community_reports_list[idx]
-        for i in range(community_reports_df.shape[0]):
-            links["community_reports"][i + max_vals["community_reports"]] = {
-                "index_name": index_name,
-                "id": i,
-            }
+        community_reports_df = community_reports_list[idx].copy()
         community_reports_df["id"] = community_reports_df["id"].apply(
             lambda x, index_name=index_name: f"{x}-{index_name}"
         )
-        max_vals["community_reports"] += community_reports_df.shape[0]
         community_reports_dfs.append(community_reports_df)
 
         # Prepare covariates
-        covariates_df = covariates_list[idx]
+        covariates_df = {
+            name: df.copy() for name, df in covariates_list[idx].items()
+        }
         for covariate_name, covariate_data in covariates_df.items():
-            if covariate_name not in links["covariates"]:
-                links["covariates"][covariate_name] = {}
-            for i in range(covariate_data.shape[0]):
-                links["covariates"][covariate_name][i + max_vals["covariates"]] = {
-                    "index_name": index_name,
-                    "id": i,
-                }
             covariate_data["id"] = covariate_data["id"].apply(
                 lambda x, index_name=index_name: f"{x}-{index_name}"
             )
-        max_vals["covariates"] += sum(covariate_data.shape[0] for covariate_data in covariates_df.values())
         covariates_dfs.append(covariates_df)
 
     # Merge the dataframes
