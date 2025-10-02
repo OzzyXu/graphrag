@@ -59,3 +59,6 @@ docsite/
 .ipynb_checkpoints/
 
 .VSCodeCounter/
+
+# Repository guidelines draft
+AGENTS.md

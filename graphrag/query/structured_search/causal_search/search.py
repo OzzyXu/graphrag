@@ -3,7 +3,6 @@
 
 """CausalSearch implementation."""
 
-import asyncio
 import json
 import logging
 import time
@@ -154,56 +153,59 @@ Add sections and commentary to the response as appropriate for the length and fo
     ) -> SearchResult:
         """Build causal search context and generate answer for the user query."""
         start_time = time.time()
-        search_prompt = ""
         llm_calls, prompt_tokens, output_tokens = {}, {}, {}
         
         logger.info(f"🚀 Starting causal search for query: '{query}'")
         logger.info(f"📊 Parameters: s_parameter={self.s_parameter}, max_context_tokens={self.max_context_tokens}")
         
         try:
-            # Step 1: Extract extended nodes (k + s) * oversample_scaler
-            # Get top_k from configuration, not kwargs
-            local_search_top_k = self.context_builder_params.get('top_k_mapped_entities', 10)
-            logger.info(f"🔍 Step 1: Extracting extended nodes with k={local_search_top_k}, s={self.s_parameter}")
-            
-            extended_nodes = await self._extract_extended_nodes(
-                query, local_search_top_k, **kwargs
+            (
+                graph_context,
+                discovery_payload,
+                causal_report,
+                discovery_prompt,
+                discovery_llm_calls,
+                discovery_prompt_tokens,
+                discovery_output_tokens,
+            ) = await self._run_discovery_stage(
+                query,
+                conversation_history=conversation_history,
+                **kwargs,
             )
-            logger.info(f"✅ Step 1 complete: Found {len(extended_nodes)} extended nodes")
-            
-            # Step 2: Extract graph information using local search components
-            logger.info(f"🔍 Step 2: Extracting graph information for {len(extended_nodes)} nodes")
-            graph_context = await self._extract_graph_information(
-                extended_nodes, **kwargs
-            )
-            logger.info(f"✅ Step 2 complete: Graph context extracted")
-            
-            # Step 3: Format network data for causal discovery prompt
-            logger.info(f"🔍 Step 3: Formatting network data for causal discovery prompt")
-            network_data = self._format_network_data_for_causal_prompt(graph_context)
-            logger.info(f"✅ Step 3 complete: Network data formatted ({len(network_data)} characters)")
-            
-            # Step 4: Generate causal report (Stage 1)
-            logger.info(f"🔍 Step 4: Generating causal report using LLM")
-            causal_report = await self._generate_causal_report(network_data)
-            logger.info(f"✅ Step 4 complete: Causal report generated ({len(causal_report)} characters)")
-            
+
+            llm_calls.update(discovery_llm_calls)
+            prompt_tokens.update(discovery_prompt_tokens)
+            output_tokens.update(discovery_output_tokens)
+
             # Step 5: Generate final response (Stage 2)
             logger.info(f"🔍 Step 5: Generating final response using LLM")
-            final_response = await self._generate_final_response(causal_report, query)
-            logger.info(f"✅ Step 5 complete: Final response generated ({len(final_response)} characters)")
+            (
+                final_response,
+                summary_prompt,
+                trimmed_report,
+            ) = await self._generate_final_response(causal_report, query)
+            logger.info(
+                "✅ Step 5 complete: Final response generated (%s characters)",
+                len(final_response),
+            )
+            llm_calls["response_generation"] = llm_calls.get(
+                "response_generation",
+                0,
+            ) + 1
+            prompt_tokens["response_generation"] = num_tokens(
+                summary_prompt,
+                self.token_encoder,
+            )
+            output_tokens["response_generation"] = num_tokens(
+                final_response,
+                self.token_encoder,
+            )
             
             # Save outputs if configured
             logger.info(f"🔍 Step 6: Saving outputs if configured")
-            await self._save_outputs(network_data, causal_report, query)
+            await self._save_outputs(discovery_payload, trimmed_report, query)
             logger.info(f"✅ Step 6 complete: Outputs saved")
             
-            # Calculate token usage
-            prompt_tokens["causal_discovery"] = num_tokens(network_data, self.token_encoder)
-            prompt_tokens["response_generation"] = num_tokens(causal_report, self.token_encoder)
-            output_tokens["causal_discovery"] = num_tokens(causal_report, self.token_encoder)
-            output_tokens["response_generation"] = num_tokens(final_response, self.token_encoder)
-
             for callback in self.callbacks:
                 callback.on_context(graph_context.context_records)
 
@@ -234,21 +236,168 @@ Add sections and commentary to the response as appropriate for the length and fo
         conversation_history: ConversationHistory | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream the causal search response."""
-        # For streaming, we'll generate the full response first, then stream it
-        result = await self.search(query, conversation_history)
-        # Split response into chunks and stream
-        response_text = result.response if isinstance(result.response, str) else str(result.response)
-        for chunk in response_text.split():
-            yield chunk + " "
-            await asyncio.sleep(0.01)  # Small delay for streaming effect
+        (
+            graph_context,
+            discovery_payload,
+            causal_report,
+            _discovery_prompt,
+            _llm_calls,
+            _prompt_tokens,
+            _output_tokens,
+        ) = await self._run_discovery_stage(
+            query,
+            conversation_history=conversation_history,
+        )
+
+        summary_context_limit = max(1_500, int(self.max_context_tokens * 0.5))
+        trimmed_report = self._clip_text_to_token_limit(
+            causal_report,
+            summary_context_limit,
+        )
+
+        async for chunk in self._stream_final_response(trimmed_report, query):
+            for callback in self.callbacks:
+                callback.on_llm_new_token(chunk)
+            yield chunk
+
+        for callback in self.callbacks:
+            callback.on_context(graph_context.context_records)
+
+        await self._save_outputs(discovery_payload, trimmed_report, query)
+
+    async def _run_discovery_stage(
+        self,
+        query: str,
+        **kwargs,
+    ) -> tuple[
+        Any,
+        str,
+        str,
+        str,
+        dict[str, int],
+        dict[str, int],
+        dict[str, int],
+    ]:
+        """Execute the discovery portion of the pipeline and collect metrics."""
+
+        # Step 1: Extract extended nodes (k + s) * oversample_scaler
+        local_search_top_k = self.context_builder_params.get(
+            'top_k_mapped_entities',
+            10,
+        )
+        logger.info(
+            "🔍 Step 1: Extracting extended nodes with k=%s, s=%s",
+            local_search_top_k,
+            self.s_parameter,
+        )
+
+        (
+            extended_nodes,
+            extended_entity_names,
+        ) = await self._extract_extended_nodes(
+            query,
+            local_search_top_k,
+            **kwargs,
+        )
+        logger.info(
+            "✅ Step 1 complete: Found %s extended nodes (entity hints: %s)",
+            len(extended_nodes),
+            len(extended_entity_names),
+        )
+
+        # Step 2: Extract graph information using local search components
+        logger.info(
+            "🔍 Step 2: Extracting graph information for %s nodes",
+            len(extended_nodes),
+        )
+        graph_context = await self._extract_graph_information(
+            query,
+            extended_nodes,
+            extended_entity_names,
+            **kwargs,
+        )
+        logger.info("✅ Step 2 complete: Graph context extracted")
+
+        llm_calls = {
+            "context_build": getattr(graph_context, "llm_calls", 0),
+        }
+        prompt_tokens = {
+            "context_build": getattr(graph_context, "prompt_tokens", 0),
+        }
+        output_tokens = {
+            "context_build": getattr(graph_context, "output_tokens", 0),
+        }
+
+        # Step 3: Format network data for causal discovery prompt
+        logger.info(
+            "🔍 Step 3: Formatting network data for causal discovery prompt",
+        )
+        network_data = self._format_network_data_for_causal_prompt(graph_context)
+        logger.info(
+            "✅ Step 3 complete: Network data formatted (%s characters)",
+            len(network_data),
+        )
+
+        # Step 4: Generate causal report (Stage 1)
+        logger.info("🔍 Step 4: Generating causal report using LLM")
+        (
+            causal_report,
+            discovery_prompt,
+            discovery_payload,
+        ) = await self._generate_causal_report(network_data)
+        logger.info(
+            "✅ Step 4 complete: Causal report generated (%s characters)",
+            len(causal_report),
+        )
+
+        llm_calls["causal_discovery"] = llm_calls.get("causal_discovery", 0) + 1
+        prompt_tokens["causal_discovery"] = num_tokens(
+            discovery_prompt,
+            self.token_encoder,
+        )
+        output_tokens["causal_discovery"] = num_tokens(
+            causal_report,
+            self.token_encoder,
+        )
+
+        return (
+            graph_context,
+            discovery_payload,
+            causal_report,
+            discovery_prompt,
+            llm_calls,
+            prompt_tokens,
+            output_tokens,
+        )
+
+    async def _stream_final_response(
+        self,
+        trimmed_report: str,
+        user_query: str,
+    ) -> AsyncGenerator[str, None]:
+        """Stream the final response tokens using the summary prompt."""
+        formatted_prompt = self.causal_summary_prompt.format(
+            causal_summary=trimmed_report,
+            query=user_query,
+            response_type=self.response_type,
+        )
+
+        history_messages = [{"role": "system", "content": formatted_prompt}]
+
+        async for token in self.model.achat_stream(
+            prompt=user_query,
+            history=history_messages,
+            model_parameters=self.model_params,
+        ):
+            yield token
 
     async def _extract_extended_nodes(
-        self, 
-        query: str, 
+        self,
+        query: str,
         local_search_top_k: int,
-        **kwargs
-    ) -> list:
-        """Extract (k+s) * oversample_scaler nodes where k = local_search_top_k, s = self.s_parameter."""
+        **kwargs,
+    ) -> tuple[list[str], list[str]]:
+        """Extract extended entity identifiers and corresponding titles for context expansion."""
         try:
             # Calculate total nodes needed: (k + s) * oversample_scaler
             s_parameter = getattr(self, 's_parameter', 3)
@@ -266,19 +415,30 @@ Add sections and commentary to the response as appropriate for the length and fo
             )
             
             # Extract entity IDs from the context
-            extracted_nodes = []
+            extracted_nodes: list[str] = []
+            extracted_titles: list[str] = []
             if hasattr(context_result, 'context_records') and context_result.context_records:
                 # Look for entities in the context records
                 entities = context_result.context_records.get('entities', pd.DataFrame())
                 if not entities.empty and len(entities) > 0:
                     # Extract entity IDs from the DataFrame
                     if 'id' in entities.columns:
-                        extracted_nodes = entities['id'].tolist()
+                        extracted_nodes = [str(value) for value in entities['id'].tolist()]
                     elif 'entity_id' in entities.columns:
-                        extracted_nodes = entities['entity_id'].tolist()
+                        extracted_nodes = [
+                            str(value)
+                            for value in entities['entity_id'].tolist()
+                        ]
                     else:
                         # If no ID column, try to get from index or other columns
-                        extracted_nodes = entities.index.tolist() if not entities.empty else []
+                        extracted_nodes = [str(index) for index in entities.index.tolist()]
+
+                    if 'entity' in entities.columns:
+                        extracted_titles = [
+                            str(value)
+                            for value in entities['entity'].fillna("").tolist()
+                            if str(value)
+                        ]
             
             # If no entities found in context records, try to extract from the context builder directly
             if not extracted_nodes:
@@ -295,10 +455,50 @@ Add sections and commentary to the response as appropriate for the length and fo
                             key=lambda x: x.rank if hasattr(x, 'rank') and x.rank else 0,
                             reverse=True
                         )
-                        extracted_nodes = [entity.id for entity in sorted_entities[:total_nodes_needed]]
+                        selected_entities = sorted_entities[:total_nodes_needed]
+                        extracted_nodes = [str(entity.id) for entity in selected_entities]
+                        extracted_titles = [
+                            getattr(entity, 'title', '')
+                            for entity in selected_entities
+                            if getattr(entity, 'title', '')
+                        ]
+
+            # Deduplicate while preserving order
+            deduped_nodes = []
+            seen_nodes = set()
+            for node in extracted_nodes:
+                if node not in seen_nodes:
+                    deduped_nodes.append(node)
+                    seen_nodes.add(node)
+
+            deduped_titles = []
+            seen_titles = set()
+            for title in extracted_titles:
+                if title and title not in seen_titles:
+                    deduped_titles.append(title)
+                    seen_titles.add(title)
+
+            if deduped_nodes and len(deduped_titles) < len(deduped_nodes):
+                if isinstance(self.context_builder, LocalSearchMixedContext):
+                    for node in deduped_nodes:
+                        entity_obj = self.context_builder.entities.get(node)
+                        if entity_obj is None:
+                            try:
+                                entity_obj = self.context_builder.entities.get(int(node))
+                            except (ValueError, TypeError):
+                                entity_obj = None
+                        if entity_obj and getattr(entity_obj, 'title', ''):
+                            title = getattr(entity_obj, 'title')
+                            if title and title not in seen_titles:
+                                deduped_titles.append(title)
+                                seen_titles.add(title)
             
-            logger.info(f"✅ Extracted {len(extracted_nodes)} extended nodes (requested: {total_nodes_needed})")
-            return extracted_nodes
+            logger.info(
+                "✅ Extracted %s extended nodes (requested: %s)",
+                len(deduped_nodes),
+                total_nodes_needed,
+            )
+            return deduped_nodes, deduped_titles
             
         except Exception as e:
             logger.error(f"Failed to extract extended nodes: {e}")
@@ -307,18 +507,33 @@ Add sections and commentary to the response as appropriate for the length and fo
 
 
     async def _extract_graph_information(
-        self, 
-        selected_nodes: list,
-        **kwargs
+        self,
+        query: str,
+        selected_nodes: list[str],
+        selected_entity_names: list[str],
+        **kwargs,
     ) -> Any:
-        """Extract graph information for the selected nodes using context builder filtering."""
+        """Extract graph information seeded by the original query and selected entity names."""
         try:
             # Use the context builder to extract graph information for selected nodes
             # The nodes were already selected in the previous step, now we build context
             # with the current configuration (which will apply token-based filtering)
+            context_params = dict(self.context_builder_params)
+
+            # Ensure the entity hints are large enough to include oversampled nodes
+            if selected_entity_names:
+                include_names = [name for name in selected_entity_names if name]
+                if include_names:
+                    context_params["include_entity_names"] = include_names
+                    original_top_k = context_params.get("top_k_mapped_entities")
+                    context_params["top_k_mapped_entities"] = max(
+                        len(include_names),
+                        original_top_k or 0,
+                    )
+
             context_result = self.context_builder.build_context(
-                query="",  # Empty query since we already have selected nodes via top_k override
-                **self.context_builder_params  # This will apply token limits and filtering
+                query=query,
+                **context_params,
             )
             
             logger.info(f"✅ Extracted graph information for {len(selected_nodes)} nodes")
@@ -341,11 +556,14 @@ Add sections and commentary to the response as appropriate for the length and fo
         """Format extracted graph information for causal discovery prompt with context truncation."""
         try:
             from graphrag.query.llm.text_utils import num_tokens
-            # Set token limits for network data components (similar to local search proportions)
-            max_total_tokens = 8000  # Conservative limit for network data portion
-            entity_token_limit = int(max_total_tokens * 0.4)  # 40% for entities
-            relationship_token_limit = int(max_total_tokens * 0.4)  # 40% for relationships  
-            text_unit_token_limit = int(max_total_tokens * 0.2)  # 20% for text units
+            # Allocate a portion of the available window to the discovery payload
+            max_total_tokens = max(2_000, int(self.max_context_tokens * 0.6))
+            entity_token_limit = int(max_total_tokens * 0.4)
+            relationship_token_limit = int(max_total_tokens * 0.35)
+            text_unit_token_limit = max(
+                max_total_tokens - entity_token_limit - relationship_token_limit,
+                int(max_total_tokens * 0.2),
+            )
             
             # Convert context data to structured format
             network_data = {
@@ -376,6 +594,9 @@ Add sections and commentary to the response as appropriate for the length and fo
                     logger.debug("No relationships found in context records")
                 
                 text_units_df = graph_context.context_records.get('text_units', pd.DataFrame())
+                if text_units_df.empty:
+                    text_units_df = graph_context.context_records.get('sources', pd.DataFrame())
+
                 if not text_units_df.empty:
                     network_data["text_units"] = self._truncate_text_units_for_context(
                         text_units_df, text_unit_token_limit
@@ -442,12 +663,44 @@ Add sections and commentary to the response as appropriate for the length and fo
             logger.error(f"Failed to format network data: {e}")
             raise CausalSearchError(f"Network data formatting failed: {e}")
 
-    async def _generate_causal_report(self, network_data: str) -> str:
-        """Generate causal analysis report using causal_discovery_prompt.txt."""
+    def _clip_text_to_token_limit(self, text: str, max_tokens: int) -> str:
+        """Trim text to the requested token limit using the configured encoder."""
+        if not text or max_tokens <= 0 or self.token_encoder is None:
+            return text
+
+        try:
+            encoded = self.token_encoder.encode(text)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.debug("Failed to encode text for clipping: %s", exc)
+            return text
+
+        if len(encoded) <= max_tokens:
+            return text
+
+        clipped = self.token_encoder.decode(encoded[:max_tokens])
+        logger.debug(
+            "Clipped text from %s to %s tokens (limit=%s)",
+            len(encoded),
+            max_tokens,
+            max_tokens,
+        )
+        return clipped
+
+    async def _generate_causal_report(
+        self, network_data: str
+    ) -> tuple[str, str, str]:
+        """Generate the causal analysis report and return content plus prompt context."""
         try:
             # Load and format the causal discovery prompt
             prompt_template = self.causal_discovery_prompt
-            formatted_prompt = prompt_template.format(graph_data=network_data)
+            payload_limit = max(2_000, int(self.max_context_tokens * 0.6))
+            trimmed_network_data = self._clip_text_to_token_limit(
+                network_data,
+                payload_limit,
+            )
+            formatted_prompt = prompt_template.format(
+                graph_data=trimmed_network_data
+            )
             
             # Call LLM to generate causal report
             response = await self.model.achat(
@@ -511,19 +764,26 @@ Add sections and commentary to the response as appropriate for the length and fo
                 logger.error("No content extracted from LLM response")
             
             logger.info(f"Generated causal report of length {len(response_content)}")
-            return response_content
+            return response_content, formatted_prompt, trimmed_network_data
             
         except Exception as e:
             logger.error(f"Causal discovery failed: {e}")
             raise CausalSearchError(f"Causal discovery stage failed: {e}")
 
-    async def _generate_final_response(self, causal_report: str, user_query: str) -> str:
-        """Generate final response using causal_summary_report.txt."""
+    async def _generate_final_response(
+        self, causal_report: str, user_query: str
+    ) -> tuple[str, str, str]:
+        """Generate final response using the causal summary prompt and return the prompt used."""
         try:
             # Load and format the causal summary prompt
             prompt_template = self.causal_summary_prompt
+            summary_context_limit = max(1_500, int(self.max_context_tokens * 0.5))
+            trimmed_report = self._clip_text_to_token_limit(
+                causal_report,
+                summary_context_limit,
+            )
             formatted_prompt = prompt_template.format(
-                causal_summary=causal_report,
+                causal_summary=trimmed_report,
                 query=user_query,
                 response_type=self.response_type
             )
@@ -590,7 +850,7 @@ Add sections and commentary to the response as appropriate for the length and fo
                 logger.error("No content extracted from final response LLM call")
             
             logger.info(f"Generated final response of length {len(response_content)}")
-            return response_content
+            return response_content, formatted_prompt, trimmed_report
             
         except Exception as e:
             logger.error(f"Response generation failed: {e}")
