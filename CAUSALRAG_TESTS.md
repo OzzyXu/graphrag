@@ -13,6 +13,10 @@
   - Confirms saved artifacts bundle trimming metadata: JSON output embeds `_trimmed_meta`, and Markdown reports append a human-readable trimming note.
 - `tests/unit/query/structured_search/test_causal_search.py::test_causal_search_raises_when_model_returns_no_content`
   - Guards against regressions where providers omit `output.content` by asserting a `CausalSearchError` with no brittle regex fallbacks.
+- `tests/unit/query/structured_search/test_causal_search.py::test_final_context_includes_entities_section_with_row_cap`
+  - Verifies new final-context options append the entities table with row caps applied, and the prompt omits rows beyond the limit.
+- `tests/unit/query/structured_search/test_causal_search.py::test_ensure_full_summary_preserves_complete_report`
+  - Ensures `ensure_full_summary` keeps the causal summary intact even when its ratio is small but the token budget allows it.
 
 ## Design Notes
 - Tests fully stub the LLM interface (`FakeChatModel`) to avoid external calls and associated costs.

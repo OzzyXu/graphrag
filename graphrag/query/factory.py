@@ -378,4 +378,5 @@ def get_causal_search_engine(
         callbacks=callbacks,
         s_parameter=cs_config.s_parameter,
         max_context_tokens=cs_config.max_context_tokens,
+        final_context_config=cs_config.final_context,
     )

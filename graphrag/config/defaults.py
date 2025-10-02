@@ -317,6 +317,33 @@ class LocalSearchDefaults:
 
 
 @dataclass
+class CausalFinalContextDefaults:
+    """Default values for causal search final-context assembly."""
+
+    include_causal_summary: bool = True
+    ensure_full_summary: bool = False
+    include_network_sections: tuple[str, ...] = ()
+    section_token_ratios: dict[str, float] = field(
+        default_factory=lambda: {
+            "summary": 0.4,
+            "entities": 0.25,
+            "relationships": 0.2,
+            "text_units": 0.1,
+            "community_reports": 0.05,
+        }
+    )
+    section_row_limits: dict[str, int] = field(
+        default_factory=lambda: {
+            "entities": 12,
+            "relationships": 30,
+            "text_units": 8,
+            "community_reports": 5,
+        }
+    )
+    max_final_context_tokens: int | None = None
+
+
+@dataclass
 class CausalSearchDefaults:
     """Default values for causal search."""
 
@@ -332,6 +359,9 @@ class CausalSearchDefaults:
     save_network_data: bool = False  # Whether to save extracted network data to files
     save_causal_report: bool = False # Whether to save causal analysis report to files
     output_folder: str = "causal_search"  # Subfolder under data/outputs/ for causal search outputs
+    final_context: CausalFinalContextDefaults = field(
+        default_factory=CausalFinalContextDefaults
+    )
 
 
 @dataclass

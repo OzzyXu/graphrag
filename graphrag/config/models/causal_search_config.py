@@ -3,9 +3,46 @@
 
 """Parameterization settings for the causal search configuration."""
 
+from typing import Dict, List
+
 from pydantic import BaseModel, Field
 
 from graphrag.config.defaults import graphrag_config_defaults
+
+
+class CausalFinalContextConfig(BaseModel):
+    """Configuration for final response context assembly."""
+
+    include_causal_summary: bool = Field(
+        description="Whether to include the causal summary in the final prompt.",
+        default=graphrag_config_defaults.causal_search.final_context.include_causal_summary,
+    )
+    ensure_full_summary: bool = Field(
+        description="Ensure the summary is clipped last so it remains intact when possible.",
+        default=graphrag_config_defaults.causal_search.final_context.ensure_full_summary,
+    )
+    include_network_sections: List[str] = Field(
+        description="Ordered list of network sections to append (e.g. entities, relationships).",
+        default_factory=lambda: list(
+            graphrag_config_defaults.causal_search.final_context.include_network_sections
+        ),
+    )
+    section_token_ratios: Dict[str, float] = Field(
+        description="Token ratio per component (including summary).",
+        default_factory=lambda: dict(
+            graphrag_config_defaults.causal_search.final_context.section_token_ratios
+        ),
+    )
+    section_row_limits: Dict[str, int] = Field(
+        description="Row limits per section when composing the final context.",
+        default_factory=lambda: dict(
+            graphrag_config_defaults.causal_search.final_context.section_row_limits
+        ),
+    )
+    max_final_context_tokens: int | None = Field(
+        description="Optional override for total Stage 3 context tokens.",
+        default=graphrag_config_defaults.causal_search.final_context.max_final_context_tokens,
+    )
 
 
 class CausalSearchConfig(BaseModel):
@@ -58,4 +95,8 @@ class CausalSearchConfig(BaseModel):
     output_folder: str = Field(
         description="Subfolder under data/outputs/ for causal search outputs.",
         default=graphrag_config_defaults.causal_search.output_folder,
+    )
+    final_context: CausalFinalContextConfig = Field(
+        description="Final response context assembly options.",
+        default_factory=CausalFinalContextConfig,
     )

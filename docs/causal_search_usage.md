@@ -33,7 +33,7 @@ causal_search:
   # Output control parameters
   save_network_data: true   # Whether to save extracted network data to files
   save_causal_report: true  # Whether to save causal analysis report to files
-  output_folder: "causal_search"  # Subfolder under data/outputs/ for causal search outputs
+  output_folder: "causal_search"  # Subfolder under output/ for causal search outputs
 ```
 
 ### Parameter Descriptions
@@ -46,7 +46,41 @@ causal_search:
 - **`max_context_tokens`**: Maximum token limit for the context window
 - **`save_network_data`**: Whether to save extracted network data as JSON files (true/false)
 - **`save_causal_report`**: Whether to save causal analysis reports as Markdown files (true/false)
-- **`output_folder`**: Subfolder name under `data/outputs/` for storing causal search outputs
+- **`output_folder`**: Subfolder name under the configured `output_base_dir` (defaults to `output/`)
+
+#### Final Context Options
+
+You can control how the final response prompt is assembled by adding an optional `final_context` block:
+
+```yaml
+causal_search:
+  ...
+  final_context:
+    include_causal_summary: true
+    ensure_full_summary: false
+    include_network_sections:
+      - entities
+      - text_units
+    section_token_ratios:
+      summary: 0.4
+      entities: 0.35
+      text_units: 0.25
+    section_row_limits:
+      entities: 12
+      relationships: 30
+      text_units: 8
+      community_reports: 5
+    max_final_context_tokens: null
+```
+
+Key fields:
+
+- `include_causal_summary`: keep the Stage 1 summary in the final prompt (defaults to `true`).
+- `ensure_full_summary`: when `true`, the summary is trimmed last so it remains intact whenever the token budget permits.
+- `include_network_sections`: ordered list of network tables to append verbatim (`entities`, `relationships`, `text_units`, `community_reports`).
+- `section_token_ratios`: ratio-based budget for each component (including `summary`), applied to the total Stage 3 token window.
+- `section_row_limits`: optional row caps per section to keep tables concise.
+- `max_final_context_tokens`: override for the Stage 3 token budget; falls back to `max_context_tokens` when omitted.
 
 ## Usage Methods
 
@@ -122,17 +156,15 @@ result = asyncio.run(run_causal_search())
 The causal search method automatically performs two stages:
 
 #### Stage 1: Causal Discovery
-- Extracts k + s nodes from the knowledge graph
-- Builds comprehensive graph context
-- Generates causal analysis report using `causal_discovery_prompt.txt`
-- Saves network data to `data/outputs/causal_search_network_data.json`
-- Saves causal report to `data/outputs/causal_search_report.md`
+- Extracts `(k + s) × oversample_scaler` entities using the user query (and any conversation history)
+- Builds formatted context tables for entities, relationships, text units, and community reports
+- Generates the causal analysis report using the bundled discovery prompt
+- Optionally saves the trimmed network payload (with metadata) to `output/<output_folder>/`
 
 #### Stage 2: Response Generation
-- Uses the causal report as context
-- Generates final response using `causal_summary_report.txt`
-- Combines causal insights with user query
-- Returns comprehensive answer
+- Trims the causal report to the configured token window
+- Generates the final response using the causal summary prompt plus the user query
+- Returns the answer alongside context data and per-stage telemetry
 
 ## Output Files
 
@@ -143,8 +175,8 @@ The method automatically saves outputs to the configured output directory with u
 ```
 output/
 └── causal_search/
-    ├── causal_search_network_data_<query_id>.json    # Extracted graph information
-    └── causal_search_report_<query_id>.md           # Causal analysis report
+    ├── causal_search_network_data_<query_id>.json    # Extracted graph information + trimming metadata
+    └── causal_search_report_<query_id>.md           # Causal analysis report + trimming note
 ```
 
 Where `<query_id>` is a unique identifier (e.g., `a70cc37d_1755454480`) that ensures each query's outputs are distinct. The query ID format is:
@@ -158,72 +190,61 @@ This naming scheme allows you to:
 
 ### Prompt Storage
 
-Prompts are stored as Python constants in the GraphRAG codebase:
+Prompts are bundled with the library as Python constants:
 
 ```
 graphrag/
 └── prompts/
     └── query/
-        ├── causal_discovery_prompt.py    # Causal discovery prompt
-        └── causal_summary_prompt.py      # Response generation prompt
+        ├── causal_discovery_prompt.py    # Stage 1 prompt
+        └── causal_summary_prompt.py      # Stage 2 prompt
 ```
 
 ### Network Data Format
 
-The `causal_search_network_data.json` contains:
+The saved JSON wraps the trimmed payload together with metadata:
 
 ```json
 {
-  "entities": [
-    {
-      "id": "entity_id",
-      "title": "Entity Name",
-      "description": "Entity description",
-      "type": "entity_type"
-    }
-  ],
-  "relationships": [
-    {
-      "source": "source_entity",
-      "target": "target_entity",
-      "description": "Relationship description",
-      "weight": 1.0
-    }
-  ],
-  "text_units": [
-    {
-      "id": "text_unit_id",
-      "text": "Text content",
-      "document_ids": ["doc1", "doc2"]
-    }
-  ],
-  "community_reports": [
-    {
-      "community_id": "community_id",
-      "summary": "Community summary",
-      "rank": 1
-    }
-  ]
+  "payload": {
+    "entities": [...],
+    "relationships": [...],
+    "text_units": [...],
+    "community_reports": [...]
+  },
+  "_trimmed_meta": {
+    "trimmed": true,
+    "token_limit": 7200,
+    "sections": {
+      "entities": {"trimmed": false, "emitted": 8},
+      "text_units": {"trimmed": true, "tokens_used": 2600}
+    },
+    "stage": "causal_discovery_payload"
+  },
+  "_final_context_meta": {
+    "summary": {"included": true, "final_tokens": 1800, ...},
+    "sections": {"entities": {"included": true, "rows_emitted": 1, ...}}
+  }
 }
 ```
 
+The `_final_context_meta` block records which components from Stage 1 were reused in the Stage 3 prompt and how much of each survived the token budget and row limits.
+
 ### Causal Report Format
 
-The `causal_search_report.md` contains:
+The saved Markdown contains the generated report followed by a trimming note, for example:
 
 ```markdown
 # Causal Analysis Report
 
-**Query:** [User's query]
+**Query:** What causes X?
 
-**Generated:** [Timestamp]
+**Generated:** 2025-01-01 12:00:00
 
-[Structured causal analysis with sections for:]
-1. Introduction
-2. Key Entities and Their Roles
-3. Major Causal Pathways
-4. Confidence and Evidence Strength
-5. Implications and Recommendations
+...
+
+---
+_Trimmed from 4100 to 1800 tokens (limit 1800)._
 ```
 
 ## Advanced Usage

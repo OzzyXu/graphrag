@@ -40,6 +40,20 @@ class CausalSearchError(Exception):
 class CausalSearch(BaseSearch[LocalSearchMixedContext]):
     """Search orchestration for causal search mode."""
 
+    FINAL_CONTEXT_ALLOWED_SECTIONS = (
+        "entities",
+        "relationships",
+        "text_units",
+        "community_reports",
+    )
+    FINAL_CONTEXT_SECTION_TITLES = {
+        "summary": "Causal Summary",
+        "entities": "Entities",
+        "relationships": "Relationships",
+        "text_units": "Text Units",
+        "community_reports": "Community Reports",
+    }
+
     def __init__(
         self,
         model: ChatModel,
@@ -52,6 +66,7 @@ class CausalSearch(BaseSearch[LocalSearchMixedContext]):
         context_builder_params: dict | None = None,
         s_parameter: int = 3,
         max_context_tokens: int = 12000,
+        final_context_config: Any | None = None,
     ):
         super().__init__(
             model=model,
@@ -65,6 +80,7 @@ class CausalSearch(BaseSearch[LocalSearchMixedContext]):
         self.response_type = response_type
         self.s_parameter = s_parameter
         self.max_context_tokens = max_context_tokens
+        self.final_context = self._normalise_final_context_config(final_context_config)
         
         # Load prompts
         self.causal_discovery_prompt = self._load_causal_discovery_prompt()
@@ -163,6 +179,7 @@ Add sections and commentary to the response as appropriate for the length and fo
                 graph_context,
                 discovery_payload,
                 discovery_meta,
+                structured_sections,
                 causal_report,
                 discovery_prompt,
                 discovery_llm_calls,
@@ -178,14 +195,33 @@ Add sections and commentary to the response as appropriate for the length and fo
             prompt_tokens.update(discovery_prompt_tokens)
             output_tokens.update(discovery_output_tokens)
 
+            (
+                final_context_text,
+                summary_text,
+                summary_meta,
+                sections_meta,
+            ) = self._assemble_final_context(
+                causal_report,
+                structured_sections,
+            )
+
+            final_context_meta = {
+                "summary": summary_meta,
+                "sections": sections_meta,
+            }
+
+            discovery_meta = dict(discovery_meta or {})
+            discovery_meta["final_context"] = final_context_meta
+
             # Step 5: Generate final response (Stage 2)
             logger.info(f"🔍 Step 5: Generating final response using LLM")
             (
                 final_response,
                 summary_prompt,
-                trimmed_report,
-                summary_meta,
-            ) = await self._generate_final_response(causal_report, query)
+            ) = await self._generate_final_response(
+                final_context_text,
+                query,
+            )
             logger.info(
                 "✅ Step 5 complete: Final response generated (%s characters)",
                 len(final_response),
@@ -208,8 +244,9 @@ Add sections and commentary to the response as appropriate for the length and fo
             await self._save_outputs(
                 discovery_payload,
                 discovery_meta,
-                trimmed_report,
+                summary_text,
                 summary_meta,
+                final_context_meta,
                 query,
             )
             logger.info(f"✅ Step 6 complete: Outputs saved")
@@ -248,6 +285,7 @@ Add sections and commentary to the response as appropriate for the length and fo
             graph_context,
             discovery_payload,
             discovery_meta,
+            structured_sections,
             causal_report,
             _discovery_prompt,
             _llm_calls,
@@ -258,19 +296,25 @@ Add sections and commentary to the response as appropriate for the length and fo
             conversation_history=conversation_history,
         )
 
-        summary_context_limit = max(1_500, int(self.max_context_tokens * 0.5))
-        trimmed_report = self._clip_text_to_token_limit(
+        (
+            final_context_text,
+            summary_text,
+            summary_meta,
+            sections_meta,
+        ) = self._assemble_final_context(
             causal_report,
-            summary_context_limit,
+            structured_sections,
         )
-        summary_meta = self._build_trim_meta(
-            original_text=causal_report,
-            trimmed_text=trimmed_report,
-            token_limit=summary_context_limit,
-        )
-        summary_meta["stage"] = "response_generation"
 
-        async for chunk in self._stream_final_response(trimmed_report, query):
+        final_context_meta = {
+            "summary": summary_meta,
+            "sections": sections_meta,
+        }
+
+        discovery_meta = dict(discovery_meta or {})
+        discovery_meta["final_context"] = final_context_meta
+
+        async for chunk in self._stream_final_response(final_context_text, query):
             for callback in self.callbacks:
                 callback.on_llm_new_token(chunk)
             yield chunk
@@ -281,8 +325,9 @@ Add sections and commentary to the response as appropriate for the length and fo
         await self._save_outputs(
             discovery_payload,
             discovery_meta,
-            trimmed_report,
+            summary_text,
             summary_meta,
+            final_context_meta,
             query,
         )
 
@@ -357,9 +402,11 @@ Add sections and commentary to the response as appropriate for the length and fo
         logger.info(
             "🔍 Step 3: Formatting network data for causal discovery prompt",
         )
-        network_data, network_meta = self._format_network_data_for_causal_prompt(
-            graph_context
-        )
+        (
+            network_data,
+            network_meta,
+            structured_sections,
+        ) = self._format_network_data_for_causal_prompt(graph_context)
         logger.info(
             "✅ Step 3 complete: Network data formatted (%s characters)",
             len(network_data),
@@ -387,12 +434,11 @@ Add sections and commentary to the response as appropriate for the length and fo
             self.token_encoder,
         )
 
-        network_meta["stage"] = "causal_discovery_payload"
-
         return (
             graph_context,
             discovery_payload,
             network_meta,
+            structured_sections,
             causal_report,
             discovery_prompt,
             llm_calls,
@@ -402,12 +448,12 @@ Add sections and commentary to the response as appropriate for the length and fo
 
     async def _stream_final_response(
         self,
-        trimmed_report: str,
+        summary_context: str,
         user_query: str,
     ) -> AsyncGenerator[str, None]:
         """Stream the final response tokens using the summary prompt."""
         formatted_prompt = self.causal_summary_prompt.format(
-            causal_summary=trimmed_report,
+            causal_summary=summary_context,
             query=user_query,
             response_type=self.response_type,
         )
@@ -588,7 +634,7 @@ Add sections and commentary to the response as appropriate for the length and fo
 
     def _format_network_data_for_causal_prompt(
         self, graph_context: Any
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any], dict[str, list[dict[str, Any]]]]:
         """Format extracted graph information for causal discovery prompt with context truncation."""
         try:
             from graphrag.query.llm.text_utils import num_tokens
@@ -730,11 +776,17 @@ Add sections and commentary to the response as appropriate for the length and fo
                 "trimmed": any(trimmed_flags),
                 "token_limit": max_total_tokens,
                 "sections": sections_meta,
-                "stage": "discovery_context",
+                "stage": "causal_discovery_payload",
             }
-            
+            structured_sections = {
+                "entities": network_data.get("entities", []),
+                "relationships": network_data.get("relationships", []),
+                "text_units": network_data.get("text_units", []),
+                "community_reports": network_data.get("community_reports", []),
+            }
+
             logger.info(f"Formatted network data with {len(network_data['entities'])} entities, {len(network_data['relationships'])} relationships")
-            return formatted_data, meta
+            return formatted_data, meta, structured_sections
             
         except Exception as e:
             logger.error(f"Failed to format network data: {e}")
@@ -815,6 +867,396 @@ Add sections and commentary to the response as appropriate for the length and fo
 
         return ""
 
+    def _normalise_final_context_config(self, cfg: Any | None) -> dict[str, Any]:
+        """Convert the final-context config into runtime-friendly primitives."""
+        defaults = {
+            "include_summary": True,
+            "ensure_full_summary": False,
+            "include_sections": [],
+            "token_ratios": {"summary": 1.0},
+            "row_limits": {},
+            "max_tokens": None,
+        }
+
+        if cfg is None:
+            return defaults
+
+        if hasattr(cfg, "model_dump"):
+            data = cfg.model_dump()
+        elif hasattr(cfg, "dict"):
+            data = cfg.dict()
+        else:
+            data = dict(cfg)
+
+        include_summary = bool(data.get("include_causal_summary", True))
+        ensure_full_summary = bool(data.get("ensure_full_summary", False))
+
+        include_sections_raw = data.get("include_network_sections", []) or []
+        include_sections = []
+        for section in include_sections_raw:
+            lowered = str(section).lower()
+            if lowered in self.FINAL_CONTEXT_ALLOWED_SECTIONS and lowered not in include_sections:
+                include_sections.append(lowered)
+
+        token_ratios_raw = data.get("section_token_ratios", {}) or {}
+        token_ratios = {
+            str(name).lower(): float(value)
+            for name, value in token_ratios_raw.items()
+            if value is not None
+        }
+        if "summary" not in token_ratios:
+            token_ratios["summary"] = 0.0
+        if sum(value for value in token_ratios.values() if value > 0) <= 0:
+            token_ratios = {"summary": 1.0}
+
+        row_limits_raw = data.get("section_row_limits", {}) or {}
+        row_limits = {}
+        for name, value in row_limits_raw.items():
+            try:
+                limit = int(value)
+            except (TypeError, ValueError):
+                continue
+            if limit <= 0:
+                continue
+            lowered = str(name).lower()
+            row_limits[lowered] = limit
+
+        max_tokens = data.get("max_final_context_tokens")
+        if isinstance(max_tokens, bool):
+            max_tokens = None
+        elif isinstance(max_tokens, (int, float)):
+            max_tokens = int(max_tokens)
+            if max_tokens <= 0:
+                max_tokens = None
+        else:
+            max_tokens = None
+
+        if not include_summary and not include_sections:
+            include_summary = True
+
+        return {
+            "include_summary": include_summary,
+            "ensure_full_summary": ensure_full_summary,
+            "include_sections": include_sections,
+            "token_ratios": token_ratios,
+            "row_limits": row_limits,
+            "max_tokens": max_tokens,
+        }
+
+    def _count_tokens(self, text: str) -> int:
+        """Return token count for text using the configured encoder."""
+        if not text:
+            return 0
+        return num_tokens(text, self.token_encoder)
+
+    def _assemble_final_context(
+        self,
+        summary_text: str,
+        structured_sections: dict[str, list[dict[str, Any]]],
+    ) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+        """Compose the Stage 3 context based on configuration."""
+
+        cfg = self.final_context
+        include_summary = cfg["include_summary"]
+        ensure_full = cfg["ensure_full_summary"]
+        selected_sections = [
+            section
+            for section in cfg["include_sections"]
+            if structured_sections.get(section)
+        ]
+
+        if not selected_sections and not include_summary:
+            include_summary = True
+
+        max_total_tokens = cfg["max_tokens"] or self.max_context_tokens
+        max_total_tokens = max(1, max_total_tokens)
+
+        sections_meta: dict[str, dict[str, Any]] = {}
+        sections_text: dict[str, str] = {}
+        blocks: list[str] = []
+
+        token_ratios = cfg["token_ratios"].copy()
+        row_limits = cfg["row_limits"]
+
+        summary_text = summary_text or ""
+        summary_meta = {
+            "stage": "response_generation_summary",
+            "included": False,
+            "trimmed": False,
+            "original_tokens": self._count_tokens(summary_text),
+            "final_tokens": 0,
+            "token_limit": None,
+        }
+
+        remaining_tokens = max_total_tokens
+
+        if include_summary:
+            if ensure_full:
+                summary_tokens_full = summary_meta["original_tokens"]
+                if summary_tokens_full > max_total_tokens:
+                    summary_final = self._clip_text_to_token_limit(
+                        summary_text,
+                        max_total_tokens,
+                    )
+                    summary_meta = self._build_trim_meta(
+                        original_text=summary_text,
+                        trimmed_text=summary_final,
+                        token_limit=max_total_tokens,
+                    )
+                    summary_meta.update(
+                        {
+                            "stage": "response_generation_summary",
+                            "included": bool(summary_final),
+                        }
+                    )
+                    remaining_tokens = max(0, max_total_tokens - summary_meta["final_tokens"])
+                    summary_text_final = summary_final
+                    selected_sections = []  # no room for sections
+                else:
+                    summary_text_final = summary_text
+                    summary_meta = self._build_trim_meta(
+                        original_text=summary_text,
+                        trimmed_text=summary_text_final,
+                        token_limit=max_total_tokens,
+                    )
+                    summary_meta.update(
+                        {
+                            "stage": "response_generation_summary",
+                            "included": bool(summary_text_final),
+                        }
+                    )
+                    remaining_tokens = max_total_tokens - summary_meta["final_tokens"]
+            else:
+                ratios_components = {comp: max(token_ratios.get(comp, 0.0), 0.0) for comp in ["summary", *selected_sections]}
+                ratio_sum = sum(ratios_components.values())
+                if ratio_sum <= 0:
+                    ratio_sum = len(ratios_components) or 1
+                    ratios_components = {
+                        comp: 1 / ratio_sum for comp in ratios_components
+                    }
+                else:
+                    ratios_components = {
+                        comp: value / ratio_sum for comp, value in ratios_components.items()
+                    }
+                summary_budget = int(max_total_tokens * ratios_components.get("summary", 0.0))
+                summary_budget = max(summary_budget, 0)
+                summary_text_final = self._clip_text_to_token_limit(
+                    summary_text,
+                    summary_budget,
+                )
+                summary_meta = self._build_trim_meta(
+                    original_text=summary_text,
+                    trimmed_text=summary_text_final,
+                    token_limit=summary_budget,
+                )
+                summary_meta.update(
+                    {
+                        "stage": "response_generation_summary",
+                        "included": bool(summary_text_final),
+                    }
+                )
+                remaining_tokens = max(
+                    0,
+                    max_total_tokens - summary_meta["final_tokens"],
+                )
+                token_ratios = {
+                    k: v for k, v in ratios_components.items() if k != "summary"
+                }
+
+            if summary_text_final:
+                blocks.append(summary_text_final.strip())
+        else:
+            summary_text_final = ""
+
+        if selected_sections and remaining_tokens > 0:
+            section_ratios = {
+                section: max(cfg["token_ratios"].get(section, 0.0), 0.0)
+                for section in selected_sections
+            }
+            ratio_sum = sum(section_ratios.values())
+            if ratio_sum <= 0:
+                ratio_sum = len(selected_sections)
+                section_ratios = {
+                    section: 1 / ratio_sum for section in selected_sections
+                }
+            budgets = {}
+            allocated = 0
+            for index, section in enumerate(selected_sections):
+                if index == len(selected_sections) - 1:
+                    budget = max(0, remaining_tokens - allocated)
+                else:
+                    budget = int(remaining_tokens * (section_ratios[section] / ratio_sum))
+                    budget = max(0, budget)
+                    allocated += budget
+                budgets[section] = budget
+
+            for idx, section in enumerate(selected_sections):
+                records = structured_sections.get(section) or []
+                budget = budgets.get(section, remaining_tokens)
+                budget = min(budget, remaining_tokens)
+                row_limit = row_limits.get(section)
+                section_text, meta = self._render_section_text(
+                    section,
+                    records,
+                    budget,
+                    row_limit,
+                )
+                meta["included"] = bool(section_text)
+                sections_meta[section] = meta
+                if section_text:
+                    blocks.append(section_text.strip())
+                    tokens_used = meta.get("tokens_used", 0)
+                    remaining_tokens = max(0, remaining_tokens - tokens_used)
+                else:
+                    remaining_tokens = max(0, remaining_tokens)
+        else:
+            for section in selected_sections:
+                sections_meta[section] = {
+                    "included": False,
+                    "trimmed": bool(structured_sections.get(section)),
+                    "rows_emitted": 0,
+                    "rows_available": len(structured_sections.get(section) or []),
+                    "row_limit": row_limits.get(section),
+                    "token_budget": 0,
+                    "tokens_used": 0,
+                    "stage": f"response_generation_section_{section}",
+                    "trimmed_by_row_limit": False,
+                    "trimmed_by_token_budget": False,
+                }
+
+        if not blocks:
+            fallback = self._clip_text_to_token_limit(summary_text, max_total_tokens)
+            summary_meta = self._build_trim_meta(
+                original_text=summary_text,
+                trimmed_text=fallback,
+                token_limit=max_total_tokens,
+            )
+            summary_meta.update(
+                {
+                    "stage": "response_generation_summary",
+                    "included": bool(fallback),
+                }
+            )
+            summary_text_final = fallback
+            if fallback:
+                blocks.append(fallback.strip())
+
+        final_context_text = "\n\n".join(blocks).strip()
+
+        for section in cfg["include_sections"]:
+            section = section
+            if section not in sections_meta:
+                records = structured_sections.get(section) or []
+                sections_meta[section] = {
+                    "stage": f"response_generation_section_{section}",
+                    "included": False,
+                    "trimmed": bool(records),
+                    "rows_emitted": 0,
+                    "rows_available": len(records),
+                    "row_limit": cfg["row_limits"].get(section),
+                    "token_budget": 0,
+                    "tokens_used": 0,
+                    "trimmed_by_row_limit": False,
+                    "trimmed_by_token_budget": False,
+                }
+
+        return final_context_text, summary_text_final, summary_meta, sections_meta
+
+    def _render_section_text(
+        self,
+        section: str,
+        records: list[dict[str, Any]],
+        token_budget: int,
+        row_limit: int | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Render a section table with token and row constraints."""
+
+        if not records or token_budget <= 0:
+            return "", {
+                "stage": f"response_generation_section_{section}",
+                "trimmed": bool(records),
+                "rows_emitted": 0,
+                "rows_available": len(records),
+                "row_limit": row_limit,
+                "token_budget": token_budget,
+                "tokens_used": 0,
+                "trimmed_by_row_limit": False,
+                "trimmed_by_token_budget": token_budget <= 0 and bool(records),
+            }
+
+        title = self.FINAL_CONTEXT_SECTION_TITLES.get(
+            section,
+            section.replace("_", " ").title(),
+        )
+        columns: list[str] = []
+        for record in records:
+            for key in record.keys():
+                if key not in columns:
+                    columns.append(key)
+
+        header = f"-----{title}-----\n" + "|".join(columns) + "\n"
+        tokens_used = self._count_tokens(header)
+        if tokens_used >= token_budget:
+            return "", {
+                "stage": f"response_generation_section_{section}",
+                "trimmed": True,
+                "rows_emitted": 0,
+                "rows_available": len(records),
+                "row_limit": row_limit,
+                "token_budget": token_budget,
+                "tokens_used": 0,
+                "trimmed_by_row_limit": False,
+                "trimmed_by_token_budget": True,
+            }
+
+        lines = [header]
+        rows_emitted = 0
+        trimmed_by_row = False
+        trimmed_by_budget = False
+        effective_row_limit = row_limit if row_limit and row_limit > 0 else None
+
+        for record in records:
+            if effective_row_limit is not None and rows_emitted >= effective_row_limit:
+                trimmed_by_row = True
+                break
+
+            row_values = [self._format_section_value(record.get(column)) for column in columns]
+            row_line = "|".join(row_values) + "\n"
+            row_tokens = self._count_tokens(row_line)
+            if tokens_used + row_tokens > token_budget:
+                trimmed_by_budget = True
+                break
+
+            lines.append(row_line)
+            tokens_used += row_tokens
+            rows_emitted += 1
+
+        trimmed = trimmed_by_row or trimmed_by_budget or rows_emitted < len(records)
+        text = "".join(lines) if rows_emitted > 0 else ""
+
+        meta = {
+            "stage": f"response_generation_section_{section}",
+            "trimmed": trimmed,
+            "rows_emitted": rows_emitted,
+            "rows_available": len(records),
+            "row_limit": effective_row_limit,
+            "token_budget": token_budget,
+            "tokens_used": tokens_used if rows_emitted > 0 else 0,
+            "trimmed_by_row_limit": trimmed_by_row,
+            "trimmed_by_token_budget": trimmed_by_budget,
+        }
+
+        return text, meta
+
+    @staticmethod
+    def _format_section_value(value: Any) -> str:
+        """Format section cell value for display."""
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple, set)):
+            return ", ".join(str(item) for item in value)
+        return str(value).replace("\n", " ")
+
     def _extract_response_text(self, response: Any, stage: str) -> str:
         """Extract textual content from a chat model response."""
         if response is None:
@@ -876,45 +1318,31 @@ Add sections and commentary to the response as appropriate for the length and fo
             raise CausalSearchError(f"Causal discovery stage failed: {e}")
 
     async def _generate_final_response(
-        self, causal_report: str, user_query: str
-    ) -> tuple[str, str, str, dict[str, Any]]:
-        """Generate final response using the causal summary prompt and return the prompt used."""
+        self, summary_context: str, user_query: str
+    ) -> tuple[str, str]:
+        """Generate final response using the composed summary context."""
         try:
-            # Load and format the causal summary prompt
             prompt_template = self.causal_summary_prompt
-            summary_context_limit = max(1_500, int(self.max_context_tokens * 0.5))
-            trimmed_report = self._clip_text_to_token_limit(
-                causal_report,
-                summary_context_limit,
-            )
             formatted_prompt = prompt_template.format(
-                causal_summary=trimmed_report,
+                causal_summary=summary_context,
                 query=user_query,
-                response_type=self.response_type
+                response_type=self.response_type,
             )
-            
-            # Call LLM to generate final response
+
             response = await self.model.achat(
                 prompt=user_query,
                 history=[{"role": "system", "content": formatted_prompt}],
-                model_parameters=self.model_params
+                model_parameters=self.model_params,
             )
-            
+
             response_content = self._extract_response_text(
                 response,
                 stage="response_generation",
             )
 
-            summary_meta = self._build_trim_meta(
-                original_text=causal_report,
-                trimmed_text=trimmed_report,
-                token_limit=summary_context_limit,
-            )
-            summary_meta["stage"] = "response_generation"
-
             logger.info(f"Generated final response of length {len(response_content)}")
-            return response_content, formatted_prompt, trimmed_report, summary_meta
-            
+            return response_content, formatted_prompt
+
         except Exception as e:
             logger.error(f"Response generation failed: {e}")
             raise CausalSearchError(f"Response generation stage failed: {e}")
@@ -925,6 +1353,7 @@ Add sections and commentary to the response as appropriate for the length and fo
         network_meta: dict[str, Any] | None,
         causal_report: str,
         report_meta: dict[str, Any] | None,
+        final_context_meta: dict[str, Any] | None,
         query: str,
     ):
         """Save outputs to data folder if enabled in configuration."""
@@ -966,6 +1395,8 @@ Add sections and commentary to the response as appropriate for the length and fo
                         "sections": {},
                     },
                 }
+                if final_context_meta:
+                    output_payload["_final_context_meta"] = final_context_meta
 
                 with open(network_data_file, 'w', encoding='utf-8') as f:
                     json.dump(output_payload, f, indent=2, ensure_ascii=False)

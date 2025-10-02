@@ -99,6 +99,19 @@ class RecordingContextBuilder(LocalContextBuilder):
         )
 
 
+class RichContextBuilder(RecordingContextBuilder):
+    """Context builder with multiple entities for section testing."""
+
+    def __init__(self):
+        super().__init__()
+        self._entities_df = pd.DataFrame(
+            [
+                {"id": str(idx), "entity": f"Entity {idx}", "description": f"Desc {idx}"}
+                for idx in range(1, 6)
+            ]
+        )
+        self.context_chunks = "rich chunk"
+
 @pytest.mark.asyncio
 async def test_causal_search_passes_entity_hints_and_includes_sources():
     long_report = "TOKEN " * 2200
@@ -210,6 +223,13 @@ async def test_causal_search_output_files_include_trim_markers(tmp_path):
         },
         s_parameter=1,
         max_context_tokens=200,
+        final_context_config={
+            "include_causal_summary": True,
+            "include_network_sections": ["entities"],
+            "section_token_ratios": {"summary": 0.4, "entities": 0.6},
+            "section_row_limits": {"entities": 1},
+            "max_final_context_tokens": 200,
+        },
     )
 
     searcher._generate_query_id = lambda _: "case"  # type: ignore[assignment]
@@ -226,6 +246,10 @@ async def test_causal_search_output_files_include_trim_markers(tmp_path):
     network_payload = json.loads(network_file.read_text())
     assert "_trimmed_meta" in network_payload
     assert "payload" in network_payload
+    assert "_final_context_meta" in network_payload
+    final_meta = network_payload["_final_context_meta"]
+    assert "summary" in final_meta
+    assert "sections" in final_meta
 
     report_text = report_file.read_text()
     assert "Trimmed from" in report_text
@@ -249,3 +273,71 @@ async def test_causal_search_raises_when_model_returns_no_content():
 
     with pytest.raises(CausalSearchError):
         await searcher.search("Why")
+
+
+@pytest.mark.asyncio
+async def test_final_context_includes_entities_section_with_row_cap():
+    model = FakeChatModel(responses=["TOKEN " * 300, "Answer"])
+    context_builder = RichContextBuilder()
+    encoder = tiktoken.get_encoding("cl100k_base")
+
+    final_context_config = {
+        "include_causal_summary": True,
+        "include_network_sections": ["entities"],
+        "section_token_ratios": {"summary": 0.4, "entities": 0.6},
+        "section_row_limits": {"entities": 2},
+        "max_final_context_tokens": 300,
+    }
+
+    searcher = CausalSearch(
+        model=model,
+        context_builder=context_builder,
+        token_encoder=encoder,
+        model_params={},
+        context_builder_params={"top_k_mapped_entities": 1},
+        s_parameter=1,
+        max_context_tokens=300,
+        final_context_config=final_context_config,
+    )
+
+    await searcher.search("Check entities")
+
+    summary_prompt = model.achat_calls[1]["history"][0]["content"]
+    assert "-----Entities-----" in summary_prompt
+    assert "Entity 1" in summary_prompt
+    assert "Entity 2" in summary_prompt
+    assert "Entity 3" not in summary_prompt
+
+
+@pytest.mark.asyncio
+async def test_ensure_full_summary_preserves_complete_report():
+    summary_text = "TOKEN " * 50
+    model = FakeChatModel(responses=[summary_text, "Answer"])
+    context_builder = RichContextBuilder()
+    encoder = tiktoken.get_encoding("cl100k_base")
+
+    final_context_config = {
+        "include_causal_summary": True,
+        "ensure_full_summary": True,
+        "include_network_sections": ["entities"],
+        "section_token_ratios": {"summary": 0.1, "entities": 0.9},
+        "section_row_limits": {"entities": 1},
+        "max_final_context_tokens": 400,
+    }
+
+    searcher = CausalSearch(
+        model=model,
+        context_builder=context_builder,
+        token_encoder=encoder,
+        model_params={},
+        context_builder_params={"top_k_mapped_entities": 1},
+        s_parameter=1,
+        max_context_tokens=400,
+        final_context_config=final_context_config,
+    )
+
+    await searcher.search("Ensure summary")
+
+    summary_prompt = model.achat_calls[1]["history"][0]["content"]
+    summary_block = summary_prompt.split("-----Entities-----")[0]
+    assert summary_block.count("TOKEN") == summary_text.count("TOKEN")
