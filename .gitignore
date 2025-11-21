@@ -62,3 +62,5 @@ docsite/
 
 # Repository guidelines draft
 AGENTS.md
+
+/.github/prompts
